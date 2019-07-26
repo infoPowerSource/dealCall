@@ -1,0 +1,44 @@
+package com.deal.service.conference;
+
+import java.util.List;
+import java.util.Map;
+
+import com.deal.entity.create.CustomerInfo;
+import com.deal.entity.party.PartyInfo;
+
+/**
+ * 会议客户（咨询客户和专家）操作接口
+ * 
+ * @author zhipeng.xu
+ *
+ */
+public interface IConfCustomerService{
+	/**
+	 * 根据会议Id查询该会议下的参会人
+	 * 
+	 * @param confId
+	 * @return
+	 */
+	public List<CustomerInfo> getPartyInfo(String confId);
+
+	/**
+	 * 从acm消息中获取 掉线的专家信息 保存入库
+	 * 
+	 * @return
+	 */
+//	public boolean savePartyStatus(PartyInfo partyInfo);
+
+	/**
+	 * 根据姓名和电话查询通讯录是否存在此人
+	 * 
+	 * @param username
+	 * @param phone
+	 */
+	public boolean addParty(CustomerInfo custInfo);
+
+	public boolean checkParty(CustomerInfo custInfo);
+	
+	public List<CustomerInfo> getCustList(String phone, int type, Long confId);
+
+	public List<Object> getConfCustList(String name, String phone, String email,String userBc);
+}

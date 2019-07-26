@@ -1,0 +1,46 @@
+input:-webkit-autofill, 
+textarea:-webkit-autofill, 
+select:-webkit-autofill { 
+     -webkit-box-shadow:0 0 0 1000px #fff inset;
+}
+ input[type=text]:focus, input[type=password]:focus, textarea:focus {
+      -webkit-box-shadow:0 0 0 1000px #fff inset !important;
+}
+
+input::-ms-clear, input::-ms-reveal{
+    display: none;
+}
+.login-form .input-item {
+    border-bottom:1px solid #d0d0d0;
+}
+.login-form .input-item.active {
+    border-bottom:1px solid #4882bf;
+    box-shadow:0 1px 0 0 #4882bf;
+}
+.login-form .input-item .input-control {
+    margin: 0 35px;
+    padding: 0;
+    width: 180px;
+    border: none;
+}
+.login-form .input-item .input-control:focus {
+    border: none;
+    box-shadow: none;
+}
+.login-form .input-item .input-password {
+    margin-right: 55px;
+    width: 160px;
+}
+.Rectangle-9 {
+    width: 380px;
+    height: 220px;
+    border-radius: 2px;
+    background-color: #ffffff;
+    color: #4a4a4a;
+    box-shadow: 0 2px 6px 0 rgba(0, 0, 0, 0.2);
+    border: solid 1px #e7e7e8;
+}
+body .Rectangle-9 .layui-layer-title{}
+body .Rectangle-9 .layui-layer-content{height: initial !important;min-height: 100px;padding-left: 43px;padding-right: 43px;}
+body .Rectangle-9 .layui-layer-setwin{right: 8px;top: 8px;}
+body .Rectangle-9 .layui-layer-btn a{width: 120px;height: 40px;margin:0px;padding:8px 28px;color: #4a4a4a;background-color: #e7e7e8;border:none;font-size: 16px;}

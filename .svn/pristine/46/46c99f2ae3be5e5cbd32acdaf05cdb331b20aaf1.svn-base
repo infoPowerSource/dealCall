@@ -1,0 +1,288 @@
+@CHARSET "UTF-8";
+.header .mainbody .search,
+.header .mainbody .calendar,
+.header .mainbody .show_date{
+	display:inline-block;
+}
+.header .mainbody .search {
+	position: relative;
+	margin-right:21px
+}
+.header .mainbody .search input {
+	padding: 0 55px 0 6px;
+	width: 340px;
+	height: 36px;
+	border-radius: 2px;
+	border: solid 1px #caced3;
+}
+.header .mainbody .search .icon-search,
+.header .mainbody .search .icon-close {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	width: 20px;
+	height: 20px;
+	font-size: 16px;
+	color: #b0b8c1;
+}
+.header .mainbody .search .icon-close {
+	right: 30px;
+}
+.header .mainbody .search .icon-search {
+	background:url(../images/search.png) no-repeat center center;
+}
+.header .mainbody .search .icon-search:hover {
+	background:url(../images/search-hover.png) no-repeat center center;
+}
+.header .mainbody .search .icon-close {
+	background:url(../images/close.png) no-repeat center center;
+}
+.header .mainbody .search .icon-close:hover {
+	background:url(../images/close-hover.png) no-repeat center center;
+}
+.header .mainbody .search .hide {
+	display: none;
+}
+.header .mainbody .calendar .icon {
+	margin-right: 10px;
+	color: #b0b8c1;
+	font-size: 20px;
+}
+.header .mainbody .user-info .icon,
+.header .mainbody .user-info .fa {
+	cursor: pointer;
+}
+.header .mainbody .calendar .show_date{
+	display:none;
+	margin-right: 16px;
+	width: 133px;
+	height: 26px;
+	padding: 0 6px;
+	background:#4882bf;
+	color:white;
+	font-size: 14px;
+	line-height: 26px;
+	border-radius: 2px;
+}
+.header .mainbody .calendar .show_date .fa-close {
+	margin-right: 0;
+	font-size: 14px;
+}
+.top-tip {
+	position: absolute;
+	top: 0px;
+	height: 40px;
+	z-index: 999999999;
+	width: 100%;
+	text-align: center
+}
+
+.top-tip .tip-text {
+	display: inline-block;
+	width: 400px;
+	height: 40px;
+	line-height: 40px;
+	background: white;
+	box-shadow: 2px 2px 2px 2px grey;
+	border-radius: 5px
+}
+
+.top-tip .tip-text button {
+	margin-left: 5px;
+	height: 30px;
+	line-height: 25px;
+	width: 80px
+}
+
+.backlog-done:before, .laydate_click.backlog-done:before, .laydate_nothis.backlog-done:before {
+    position: absolute;
+    bottom: 1px;
+    left: 14.5px;
+    content: "";
+    width: 4px;
+    height: 4px;
+    background-color: #c6c6c6 !important;
+    color: #c6c6c6 !important;
+    border-radius: 4px;
+}
+.backlog-done, .laydate_click.backlog-done, .laydate_nothis.backlog-done {
+    position: relative;
+    text-align: center;
+}
+
+.backlog:before, .laydate_click.backlog:before, .laydate_nothis.backlog:before {
+    position: absolute;
+    bottom: 1px;
+    left: 14.5px;
+    content: "";
+    width: 4px;
+    height: 4px;
+    background-color: #4882bf !important;
+    color: #4882bf !important;
+    border-radius: 4px;
+}
+.laydate_click.backlog:before,
+.laydate_click.backlog-done:before {
+	 background-color: #fff !important;
+    color: #fff !important;
+}
+#test .table-box.table-conf-live table tbody{
+	margin-top:41px;
+}
+#test .floatHeader{
+	position:absolute;
+	top: 0;
+    width:100%;
+    line-height: 60px;
+    display: block;
+    border:1px solid #cdd9ea;
+}
+#test .floatHeader .time{
+	padding-left:30px
+}
+#test .floatHeader .main{
+	padding-left:10px
+}
+#test .floatHeader .cusstatus{
+	padding-left:25px
+}
+#test .floatHeader .perstatus{
+	padding-left:31px
+}
+.task-search-title {
+	display: none;
+	height: 42px;
+	font-size: 16px;
+	color: #4a4a4a;
+}
+.task-search-title .important {
+	color: #eb6a6e;
+}
+.content-search-result .important {
+	color: #eb6a6e;
+}
+.content-main .conf-result-table-content {
+	position: absolute;
+    left: 0;
+    right: 0;
+    top: 61px;
+    bottom: 0;
+	overflow-y: auto;
+}
+.content-main .data-content .task-list {
+	background-color: #f1f1f2;
+}
+.content-confLive-result .conf-result-table-content .pub-table,
+.content-confOver-result .conf-result-table-content .pub-table {
+	box-shadow: 0 1px 4px 0 rgba(190, 190, 190, 0.5);
+}
+
+.content-confLive-result .conf-result-table-content .conf-day-head,
+.content-confOver-result .conf-result-table-content .conf-day-head {
+	margin-left: 30px;
+	padding-bottom: 9px;
+	padding-top: 29px;
+	height: 60px;
+	line-height: 22px;
+	font-size: 16px;
+  	color: #4a4a4a;
+}
+.content-confOver-result tbody .date {
+	display: none;
+}
+.content-search-result tbody .date {
+	margin-right: 30px;
+}
+.content-search-result .td-edit-btn {
+	margin-left: 0;
+}
+.content-main .task-loading {
+	height: 36px;
+	line-height: 36px;
+	text-align: center;
+}
+.content-search-result .task-loading .fa {
+	margin-right: 10px;
+}
+#test .table-box.table-conf-over {
+	min-height: 670px;
+}
+.content-main .no-task {
+	positon: relative;
+	display: none;
+}
+.content-main .no-task .icons-nobg{
+	margin: -125px 0 0 -97px;
+	padding-top: 230px;
+	position: absolute;
+    top:50%;
+    left:50%;
+}
+
+.content-main .data-content {
+	position: absolute;
+	left: 0;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	display: none;
+}
+.content-main .data-content .data-result-content {
+	width: 100%;
+	height: 100%;
+}
+.content-main .content-confLive-result {
+	display: block;
+}
+.content-confLive-result .conf-result-table-head,
+.content-confOver-result .conf-result-table-head {
+	visibility: hidden;
+}
+.conflist-container {
+	position: absolute;
+    left: 0;
+    top: 80px;
+    right: 0;
+    bottom: 0;
+}
+.conflist-container .footer {
+	position: absolute;
+	bottom: 0;
+}
+.conf-day-box:first-child .conf-day-head {
+	display: none;
+}
+.tab-wrap li {
+	min-width: 162px;
+}
+.header .mainbody .calendar .icon-date {
+	display: inline-block;
+	width: 20px;
+	height: 22px;
+	background:url(../images/calendar.png) no-repeat center;
+	vertical-align: middle;
+}
+.header .mainbody .calendar .icon-date:hover {
+	background-image: url(../images/calendar-hover.png)
+}
+.checked {
+	position: absolute;
+	background: url(../images/checked.png) no-repeat;
+	width: 30px;
+	height: 30px;
+}
+.laydate_table {
+	border-collapse: separate !important;
+}
+.laydate_body .laydate_table td {
+	border-radius: 4px;
+	border: solid 1px #fff;
+}
+.laydate_body .laydate_table td:hover {
+	background-color: #fff;
+	border-color: #4882bf;
+}
+.laydate_body .laydate_table .today {
+	background-color: #fff;
+	border-color: #b0b8c1;
+}

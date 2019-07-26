@@ -1,0 +1,291 @@
+package com.deal.service.acm.impl;
+
+import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
+import java.util.Map;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.util.ObjectUtils;
+
+import com.deal.dao.create.ConferenceDao;
+import com.deal.dao.login.UserInfoDao;
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.entity.login.UserInfo;
+import com.deal.service.acm.IACMService;
+import com.deal.util.Consts;
+import com.deal.util.StringUtils;
+import com.gnet.acmw.client.AcmClient;
+import com.gnet.acmw.client.IConfAccount;
+import com.gnet.acmw.client.IConfMgm;
+import com.gnet.acmw.client.impl.Conference;
+import com.google.common.collect.Maps;
+
+import Ice.StringHolder;
+
+@Service
+public class ACMServiceImpl implements IACMService{
+	private static Logger logger = LoggerFactory.getLogger(ACMServiceImpl.class);
+	private AcmClient client = AcmClient.getInstance();
+	private IConfAccount confAccount = client.getConfAccount();
+	private IConfMgm confMgm = client.getConfMgm();
+	@Value("${deal.beforeJoinConference}")
+	private int beforJoinConference;
+	@Autowired
+	private ConferenceDao confDao;
+	@Autowired
+	private UserInfoDao userInfoDao;
+
+	// 主持人加入会议时的语音提示 0：无提示音
+	private String pcode1InTone = "1";
+	// 参与人加入会议时的语音提示（0：无提示音，1：提示蜂音，2：语音报名）
+	private String pcode2InTone = "1";
+	// 所有与会者在加入会议时，是否需要录制姓名（1：是，0：否）
+	private String participantNameRecordAndPlayback = "0";
+	// 当主持人退出会议时会议是否自动终止（1：是，0：否）
+	private String chairDisc = "1";
+	// 会议参与人加入会议时，是否通知其会议中的参与方数（1：是，0：否）
+	private String validationCount = "0";
+	// 第一方与会者是否需要听到“他/她是第一个入会者”的提示（1：是，0：否）
+	private String firstCallerMsg = "0";
+	// 是否需要项目号功能（1：是，0：否）
+	private String enableProjectCodes = "0";
+	// 是否能外呼（2：能，0：不能）
+	private String unattendedDialOutAllowed = "2";
+	// 录音功能（0:无录音功能，2:按需控制录音，3:自动录音）
+	private String taped = "2";
+	// 主持人没有入会会议是否可以开始 0:不开始 1:开始
+	private String confQuickStart = "1";
+	// 会议提示语言 1：英文 ；2：中文
+	private String language = "2";
+	// 录音方式0:外部录音。1:内部录音
+	private String recordType = "1";
+	// 预约会议类型，
+	private String Type = "conference";	
+	
+	private String namePrefix="-DEAL-";
+
+	@Override
+	public int createConference(ConferenceInfo confInfo){
+		SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+		Timestamp beginTime = new Timestamp(confInfo.getBeginTime().getTime() - beforJoinConference * 60 * 1000);
+		String duration = String.valueOf((confInfo.getConfDuration() + beforJoinConference));
+		Map<String, String> msgMap = Maps.newHashMap();
+		msgMap.put("BillingCode", confInfo.getConfBillingcode());
+		msgMap.put("CustomerCode", confInfo.getAccountCode());
+		msgMap.put("ConferenceName",namePrefix+confInfo.getConfName());
+		msgMap.put("ConfTime", df.format(beginTime));
+		msgMap.put("Duration", duration);
+		msgMap.put("HostCode", confInfo.getChairmanPassword());
+		msgMap.put("GuestCode", confInfo.getPartyPassword());
+		msgMap.put("BridgeName", confInfo.getBridgeName());
+		// 参与人进入会议模式 M静音 ；T可听可讲
+	    msgMap.put("GuestMode", "T");
+		//根据billingcode，查询主账号同步属性，作为预约会议属性
+		UserInfo useinfo = userInfoDao.getUserInfoByBillcode(confInfo.getAccountBillingcode());
+		if(useinfo != null){
+			msgMap.put("HostInTone", String.valueOf(useinfo.getPcode1InTone()));
+			msgMap.put("HostOutTone", String.valueOf(useinfo.getPcode1OutTone()));
+			msgMap.put("GuestInTone", String.valueOf(useinfo.getPcode2InTone()));
+			msgMap.put("GuestOutTone", String.valueOf(useinfo.getPcode2OutTone()));
+		}
+		// 不限制方数
+		msgMap.put("Parties", "0");
+		// 0:人工会 。1：自助会
+		msgMap.put("Type", Type);
+		msgMap.put("PcodeType", "1");
+		msgMap.put("HostConfirmMsg", "1");
+		msgMap.put("HostMode", "T");
+		msgMap.put("GuestConfirmMsg", "1");
+		msgMap.put("DialOutAllowed", "1");
+		msgMap.put("HostStraightToConf", "1");
+		msgMap.put("IfPinConf", "0");
+		msgMap.put("Language", language);
+		msgMap.put("Taped", taped);
+		msgMap.put("PNR", participantNameRecordAndPlayback);
+		msgMap.put("ChairDisc", "0");
+		msgMap.put("ConfQuickStart", confQuickStart);
+		msgMap.put("AutoBreakDown", "0");
+		msgMap.put("ValidationCount", validationCount);
+		msgMap.put("FirstCallerMsg", "0");
+		msgMap.put("EnableProjectCodes", "0");
+		msgMap.put("RecordType", recordType);
+		msgMap.put("CLPEnabled", "0");
+		// 0:不需要使用外部验证类型。外部验证类型 1：路演验证
+		msgMap.put("ExternalValidationType", "0");
+		msgMap.put("Filter", "1");
+		StringHolder responseDetailHolder = new StringHolder();
+		int result = confAccount.reserveConf(msgMap, responseDetailHolder);
+		if(result != 0){
+			logger.error("创建会议调用统一接口失败！billingcode=" + confInfo.getConfBillingcode());
+			logger.error("ACM返回值:" + responseDetailHolder.value);
+			// 如果返回错误为会议密码重复，返回1
+			if(responseDetailHolder.value.equals("passcode is duplicate")){
+				return 1;
+			}else{
+				// 如果返回错误为billingcode重复，返回2
+				if(responseDetailHolder.value.equals("BillingCode duplicate")){
+					return 2;
+				}else{
+					// 返回其他错误，抛出异常
+					throw new RuntimeException("开通会议失败!");
+				}
+			}
+		}
+		// 预约会议成功，返回0
+		logger.info("创建会议调用统一接口成功！billingcode=" + confInfo.getConfBillingcode());
+		return 0;
+	}
+
+	@Override
+	public int updateConference(ConferenceInfo confInfo){
+
+		SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+		Timestamp beginTime = new Timestamp(confInfo.getBeginTime().getTime() - beforJoinConference * 60 * 1000);
+		String duration = String.valueOf((confInfo.getConfDuration() + beforJoinConference));
+		Map<String, String> msgMap = Maps.newHashMap();
+		msgMap.put("BillingCode", confInfo.getConfBillingcode());
+		msgMap.put("CustomerCode", confInfo.getAccountCode());
+		msgMap.put("ConferenceName",namePrefix+confInfo.getConfName());
+		msgMap.put("ConfTime", df.format(beginTime));
+		msgMap.put("Duration", duration);
+		msgMap.put("HostCode", confInfo.getChairmanPassword());
+		msgMap.put("GuestCode", confInfo.getPartyPassword());
+		msgMap.put("BridgeName", confInfo.getBridgeName());
+		// 参与人进入会议模式 M静音 ；T可听可讲
+	    msgMap.put("GuestMode", "T");
+		//根据billingcode，查询主账号同步属性，作为预约会议属性
+		UserInfo useinfo = userInfoDao.getUserInfoByBillcode(confInfo.getAccountBillingcode());
+		if(useinfo != null){
+			msgMap.put("HostInTone", String.valueOf(useinfo.getPcode1InTone()));
+			msgMap.put("HostOutTone", String.valueOf(useinfo.getPcode1OutTone()));
+			msgMap.put("GuestInTone", String.valueOf(useinfo.getPcode2InTone()));
+			msgMap.put("GuestOutTone", String.valueOf(useinfo.getPcode2OutTone()));
+		}
+		// 不限制方数
+		msgMap.put("Parties", "0");
+		// 1：自助会
+		msgMap.put("PcodeType", "1");
+		msgMap.put("Type", Type);
+		msgMap.put("HostConfirmMsg", "1");
+		msgMap.put("HostMode", "T");
+		msgMap.put("GuestConfirmMsg", "1");
+		msgMap.put("IfPinConf", "0");
+		msgMap.put("Language", language);
+		msgMap.put("DialOutAllowed", unattendedDialOutAllowed);
+		msgMap.put("HostStraightToConf", "1");
+		msgMap.put("Taped", taped);
+		msgMap.put("PNR", participantNameRecordAndPlayback);
+		msgMap.put("ChairDisc", "0");
+		msgMap.put("ConfQuickStart",confQuickStart);
+		msgMap.put("AutoBreakDown", "0");
+		msgMap.put("ValidationCount", validationCount);
+		msgMap.put("FirstCallerMsg", "0");
+		msgMap.put("EnableProjectCodes", "0");
+		msgMap.put("RecordType", recordType);
+		msgMap.put("CLPEnabled", "0");
+		msgMap.put("ExternalValidationType", "0");
+		msgMap.put("Filter", "1");
+		StringHolder responseDetailHolder = new StringHolder();
+		int result = confAccount.updateConf(msgMap.get("BillingCode"), msgMap.get("BridgeName"), msgMap, responseDetailHolder);
+		if(result != 0){
+			logger.error("修改会议调用统一接口失败！billingcode=" + confInfo.getConfBillingcode());
+			logger.error("ACM返回值:" + responseDetailHolder.value);
+			// 如果返回错误为会议密码重复，返回1
+			if(responseDetailHolder.value.equals("passcode is duplicate")){
+				return 1;
+			}else{
+				// 如果返回错误为billingcode重复，返回2
+				if(responseDetailHolder.value.equals("BillingCode duplicate")){
+					return 2;
+				}else{
+					// 返回其他错误，抛出异常
+					throw new RuntimeException("更新会议失败!");
+				}
+			}
+		}
+		// 预约会议成功，返回0
+		logger.info("更新会议信息成功！billingcode=" + confInfo.getConfBillingcode());
+		return 0;
+	}
+
+	@Override
+	public int deleteConferenceById(ConferenceInfo confInfo){
+		if(ObjectUtils.isEmpty(confInfo)){
+			logger.error("会议信息为空，会议ID:" + confInfo.getConfId());
+			// 没找到改会议信息
+			return 1;
+		}
+		if(confInfo.getConfStatus() == Consts.CONFERENCE_STATUS_BEGINING){
+			logger.error("会议召开中，不能删除，会议ID" + confInfo.getConfId());
+			// 会议召开中
+			return 2;
+		}else if(confInfo.getConfStatus() == Consts.CONFERENCE_STATUS_END){
+			logger.error("会议以结束，不能删除，会议ID" + confInfo.getConfId());
+			// 会议已经结束
+			return 3;
+		}
+		StringHolder responseDetailHolder = new StringHolder();
+		int result = confAccount.deleteConf(confInfo.getConfBillingcode(), responseDetailHolder);
+		if(result != 0){
+			logger.error("删除会议调用统一接口失败！billingcode=" + confInfo.getConfBillingcode()+"错误信息="+responseDetailHolder.value);
+			throw new RuntimeException("删除会议失败!");
+		}
+		logger.info("删除会议调用统一接口成功！confId=" + confInfo.getConfId());
+		return 0;
+	}
+
+	@Override
+	public int deleteConfByBillingcode(String confBillingcode){
+		if(StringUtils.isEmptyString(confBillingcode)){
+			logger.error("会议billingcode为空");
+		}
+		StringHolder responseDetailHolder = new StringHolder();
+		int result = confAccount.deleteConf(confBillingcode, responseDetailHolder);
+		if(result != 0){
+			logger.error("删除会议调用统一接口失败！billingcode=" + confBillingcode);
+		    return 1;
+		}
+		logger.info("删除会议调用统一接口成功");
+		return 0;
+	}
+	
+	public int stopRecord(ConferenceInfo confInfo){
+		Conference conference = (Conference) confMgm.getConference(confInfo.getConfBillingcode());
+		if(ObjectUtils.isEmpty(conference)){
+			logger.error("查询ACM会议为空，BC:" + confInfo.getConfBillingcode());
+			return 1;
+		}
+//		IBridgeConference bridgeConf = conference.getBridgeConference(confInfo.getBridgeName());
+//		if(ObjectUtils.isEmpty(bridgeConf)){
+//			logger.error("查询ACM的IBridgeConference为空，BC:" + confInfo.getConfBillingcode() + "bridgeName:" + confInfo.getBridgeName());
+//			return 1;
+//		}
+		// 0:未录用 1:正在录用 2录音暂停
+//		if(bridgeConf.getRecordState()==1){
+		conference.stopRecord();
+		logger.info("会议停止录音，会议bc="+confInfo.getConfBillingcode());
+//		}
+		return 0;
+	}
+	public int startRecord(ConferenceInfo confInfo){
+		Conference conference = (Conference) confMgm.getConference(confInfo.getConfBillingcode());
+		if(ObjectUtils.isEmpty(conference)){
+			logger.error("查询ACM会议为空，BC:" + confInfo.getConfBillingcode());
+			return 1;
+		}
+//		IBridgeConference bridgeConf = conference.getBridgeConference(confInfo.getBridgeName());
+//		if(ObjectUtils.isEmpty(bridgeConf)){
+//			logger.error("查询ACM的IBridgeConference为空，BC:" + confInfo.getConfBillingcode() + "bridgeName:" + confInfo.getBridgeName());
+//			return 1;
+//		}
+//		if(bridgeConf.getRecordState()!=1){
+		conference.startRecord();
+		logger.info("会议开始录音，会议bc="+confInfo.getConfBillingcode());
+//		}
+		return 0;
+	}
+}

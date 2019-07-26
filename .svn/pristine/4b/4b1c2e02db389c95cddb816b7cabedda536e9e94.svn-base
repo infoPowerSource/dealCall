@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns="http://www.springframework.org/schema/beans" xmlns:aop="http://www.springframework.org/schema/aop"
+       xmlns:context="http://www.springframework.org/schema/context" xmlns:tx="http://www.springframework.org/schema/tx"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-4.0.xsd
+     http://www.springframework.org/schema/aop http://www.springframework.org/schema/aop/spring-aop-4.0.xsd
+     http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-4.0.xsd
+     http://www.springframework.org/schema/tx http://www.springframework.org/schema/tx/spring-tx-4.0.xsd">
+	
+    <!-- load properties file-->
+    <bean id="propertyConfigurer" class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
+		<property name="locations">
+			<list>
+				<value>classpath:db.properties</value>
+				<value>classpath:deal.properties</value>
+				<value>classpath:redis.properties</value>
+			</list>
+		</property>
+	</bean>
+    
+    
+    <!-- deal data source -->
+    <bean id="dataSource" class="${dataSource.className}"  destroy-method="close">
+        <property name="driverClass" value="${db_driver}"/>
+        <property name="jdbcUrl" value="${db_url}"/>
+        <property name="username" value="${db_userName}"/>
+        <property name="password" value="${db_password}"/>
+        <property name="idleConnectionTestPeriodInMinutes" value="120"/>
+        <property value="60" name="idleMaxAgeInMinutes"/>
+        <property value="50" name="maxConnectionsPerPartition"/>
+        <property value="10" name="minConnectionsPerPartition"/>
+        <property value="3" name="partitionCount"/>
+        <property value="10" name="acquireIncrement"/>
+        <property value="50" name="statementsCacheSize"/>
+        <property value="3" name="releaseHelperThreads"/>  
+    </bean>
+
+    <bean id="sessionFactory" class="org.springframework.orm.hibernate4.LocalSessionFactoryBean">
+        <property name="dataSource" ref="dataSource" />
+        <property name="hibernateProperties">
+            <value>
+                hibernate.dialect=org.hibernate.dialect.MySQL5Dialect
+                hibernate.hbm2ddl.auto=update
+                hibernate.show_sql=false
+                hibernate.format_sql=true
+            </value>
+        </property>
+        <property name="packagesToScan">
+            <list>
+                <value>com.deal.entity</value>
+            </list>
+        </property>
+    </bean>
+  
+    <!--MSS datasource -->
+    <bean id="mssDataSource" class="${dataSource.className}"  destroy-method="close">
+        <property name="driverClass" value="${db.mss.driverClass}"/>
+        <property name="jdbcUrl" value="${db.mss.url}"/>
+        <property name="username" value="${db.mss.username}"/>
+        <property name="password" value="${db.mss.password}"/>
+        <property name="idleConnectionTestPeriodInMinutes" value="60"/>
+        <property value="240" name="idleMaxAgeInMinutes"/>
+        <property value="3" name="maxConnectionsPerPartition"/>
+        <property value="1" name="minConnectionsPerPartition"/>
+        <property value="3" name="partitionCount"/>
+        <property value="10" name="acquireIncrement"/>
+        <property value="20" name="statementsCacheSize"/>
+        <property value="3" name="releaseHelperThreads"/>  
+    </bean>
+    
+    <bean id="MssSessionFactory" class="org.springframework.orm.hibernate4.LocalSessionFactoryBean" autowire="byName">
+        <property name="dataSource" ref="mssDataSource" />
+        <property name="hibernateProperties">
+            <value>
+                hibernate.dialect=org.hibernate.dialect.MySQL5Dialect
+                hibernate.show_sql=false
+                hibernate.format_sql=true
+            </value>
+        </property>
+        <property name="packagesToScan">
+            <list>
+                <value>com.deal.entity.gnet</value>
+            </list>
+        </property>
+    </bean>
+    
+    <bean id="mailSendDao" class="com.deal.dao.mss.MailSendDao">
+      <property name="sessionFactory" ref="MssSessionFactory"></property>
+    </bean>
+
+    <bean id="txManager" class="org.springframework.orm.hibernate4.HibernateTransactionManager">
+        <property name="sessionFactory" ref="sessionFactory"></property>
+    </bean>
+    
+    <!-- thread pool -->
+    <bean id="threadPoolTaskExecutor" class="org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor">
+        <property name="corePoolSize" value="20"/>
+        <property name="keepAliveSeconds" value="600"/>
+        <property name="maxPoolSize" value="600"/>
+        <property name="queueCapacity" value="100"/>
+    </bean>
+    
+	<bean id="csgHttpClientFactory" class="org.springframework.http.client.SimpleClientHttpRequestFactory">
+		<property name="connectTimeout" value="${syncBoss.restTemplate.connectTimeout}" />
+		<property name="readTimeout" value="${syncBoss.restTemplate.readTimeout}" />
+	</bean>
+
+	<!--RestTemplate -->
+	<bean id="csgRestTemplate" class="org.springframework.web.client.RestTemplate">
+		<constructor-arg ref="csgHttpClientFactory" />
+	</bean>
+    
+    <!--config traction -->
+    <tx:advice id="txAdvice" transaction-manager="txManager">
+        <tx:attributes>
+            <tx:method name="save*" rollback-for="Exception" propagation="REQUIRED"/>
+            <tx:method name="add*" rollback-for="Exception" propagation="REQUIRED"/>
+            <tx:method name="create*" rollback-for="Exception" propagation="REQUIRED"/>
+            <tx:method name="insert*" rollback-for="Exception" propagation="REQUIRED"/>
+            <tx:method name="update*" rollback-for="Exception" propagation="REQUIRED"/>
+            <tx:method name="del*" rollback-for="Exception" propagation="REQUIRED"/>
+            <tx:method name="mod*" rollback-for="Exception" propagation="REQUIRED"/>
+            <tx:method name="execute*" rollback-for="Exception" propagation="REQUIRED"/>
+            <!-- For Hibernate4-->
+            <tx:method name="get*" propagation="REQUIRED" read-only="false"/>
+            <tx:method name="count*" propagation="REQUIRED" read-only="true"/>
+            <tx:method name="find*" propagation="REQUIRED" read-only="true"/>
+            <tx:method name="list*" propagation="REQUIRED" read-only="true"/>
+            <tx:method name="*" read-only="true"/>
+        </tx:attributes>
+    </tx:advice>
+   
+    <aop:config expose-proxy="true">
+        <aop:pointcut id="service" expression="execution(* com.deal.service..*.*(..)))"/>
+        <aop:advisor pointcut-ref="service" advice-ref="txAdvice"/>
+    </aop:config>
+    
+    <!-- Redis config -->
+    <bean id="poolConfig" class="redis.clients.jedis.JedisPoolConfig">
+  		<property name="maxIdle" value="${redis.maxldle}"/>
+  	 	<property name="maxTotal" value="${redis.maxActive}" />  
+     	<property name="maxWaitMillis" value="${redis.maxWait}" />  
+  		<property name="testOnBorrow" value="${redis.testOnBorrow}"/>
+    </bean>
+    <bean id ="redisconnection" class="org.springframework.data.redis.connection.jedis.JedisConnectionFactory">
+	     <property name="hostName" value="${redis.host}"/>
+	     <property name="port" value="${redis.port}"/>
+	     <property name="password" value="${redis.pass}"/>
+	     <property name="poolConfig" ref="poolConfig"/>
+    </bean>
+    
+	<bean id="redisTemplate" class="org.springframework.data.redis.core.RedisTemplate">
+	  	 <property name="connectionFactory" ref="redisconnection"/>
+	</bean>
+</beans>

@@ -1,0 +1,363 @@
+package com.deal.service.conference.Impl;
+
+import java.sql.Timestamp;
+import java.util.List;
+import java.util.Map;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.BeanUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import com.deal.dao.create.ConferenceDao;
+import com.deal.dao.create.CustomerDao;
+import com.deal.dao.report.ConferenceRadioDao;
+import com.deal.dao.report.ConferenceReportDao;
+import com.deal.entity.create.AppConferenceDetail;
+import com.deal.entity.create.ConferenceDetail;
+import com.deal.entity.create.ConferenceEndInfo;
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.entity.create.ConferenceInfoForm;
+import com.deal.entity.create.ConferenceOnline;
+import com.deal.entity.create.ConferenceRadioInfo;
+import com.deal.entity.create.ConferenceReportInfo;
+import com.deal.entity.create.CustomerInfo;
+import com.deal.entity.party.PartyInfo;
+import com.deal.monitor.handler.IConfMonitorService;
+import com.deal.service.conference.IConfCustomerService;
+import com.deal.service.conference.IConfInfoDetail;
+import com.deal.service.create.IConferenceService;
+import com.deal.util.Consts;
+import com.deal.util.DateFormatUtil;
+import com.deal.util.StringUtils;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+
+/**
+ * 会议详情service
+ * 
+ * @author zhipeng.xu
+ *
+ */
+@Service
+public class ConfInfoDetailImpl implements IConfInfoDetail{
+	public static final Logger logger = LoggerFactory.getLogger(ConfInfoDetailImpl.class);
+	@Autowired
+	private IConferenceService conferenceService;
+	@Autowired
+	private IConfCustomerService confCustomerService;
+	@Autowired
+	private IConfMonitorService confMonitorService;
+	@Autowired
+	private ConferenceRadioDao radioDao;
+	@Autowired
+	private ConferenceReportDao reportDao;
+	@Autowired
+	private CustomerDao custDao;
+	@Autowired
+	private ConferenceDao confDao;
+
+	@Override
+	public ConferenceDetail getConfDetail(String billingCode, Timestamp beginTime, Timestamp endTime){
+		List<ConferenceInfo> confList = Lists.newArrayList();
+		/**
+		 * 结束会议
+		 */
+		List<ConferenceEndInfo> confEnd = Lists.newArrayList();
+		/**
+		 * 在线会议
+		 */
+		List<ConferenceOnline> confIn = Lists.newArrayList();
+		ConferenceDetail confDetail = new ConferenceDetail();
+		try{
+			confList = conferenceService.getConfByCreateAndTime(billingCode, beginTime, endTime);
+			handleConfList(confList, confEnd, confIn, confDetail);
+		}catch (Exception e){
+			e.printStackTrace();
+		}
+		return confDetail;
+	}
+
+	private void handleConfList(List<ConferenceInfo> confList, List<ConferenceEndInfo> confEnd, List<ConferenceOnline> confIn, ConferenceDetail confDetail){
+		for(int confIndex = 0; confIndex < confList.size(); confIndex++){
+			ConferenceInfo conf = confList.get(confIndex);
+			List<CustomerInfo> custList = Lists.newArrayList();
+			// 咨询客户在线
+			List<PartyInfo> hostonline = Lists.newArrayList();
+			// 专家在线
+			List<PartyInfo> guestonline = Lists.newArrayList();
+			// 咨询客户离线
+			List<PartyInfo> hostoffline = Lists.newArrayList();
+			// 专家离线
+			List<PartyInfo> guestoffline = Lists.newArrayList();
+			ConferenceOnline confOnline = new ConferenceOnline();
+			List<PartyInfo> finPartyList = Lists.newArrayList();
+			ConferenceInfoForm confInfoForm = new ConferenceInfoForm();
+			BeanUtils.copyProperties(conf, confInfoForm);
+			confInfoForm.setConfId(String.valueOf(conf.getConfId()));
+			String timeBegin = DateFormatUtil.DateToStr(conf.getBeginTime(), "HH:mm");
+			String confTime = DateFormatUtil.DateToStr(conf.getBeginTime(), "yyyy-MM-dd");
+			String timeEnd = DateFormatUtil.DateToStr(conf.getEndTime(), "HH:mm");
+			String orderTime = timeBegin + "-" + timeEnd;
+			// 正在召开的,未召开，会中休息
+			long custBegin = System.currentTimeMillis();
+			if(conf.getConfStatus() == Consts.CONFERENCE_STATUS_NOTBEGIN || conf.getConfStatus() == Consts.CONFERENCE_STATUS_BEGINING
+					|| conf.getConfStatus() == Consts.CONFERENCE_STATUS_REST){
+				confOnline.setOrderTime(orderTime);
+				confOnline.setConfTime(confTime);
+				// 根据会议Id 查询通讯录中的参会人
+				custList = custDao.getCustList(String.valueOf(conf.getConfId()));
+				for(int custIndex = 0; custIndex < custList.size(); custIndex++){
+					CustomerInfo custInfo = custList.get(custIndex);
+					PartyInfo partyForm = new PartyInfo();
+					String phone = getAcmPhone(custInfo);
+					Integer status = confMonitorService.isOnline(conf.getConfBillingcode(), phone);
+					partyForm.setPartyStatus(status);
+					partyForm.setPartyName(custInfo.getCustName());
+					partyForm.setPartyPhone(custInfo.getCustTel());
+					partyForm.setPartyRole(custInfo.getCustType());
+					if(custInfo.getCustType() == Consts.IS_HOST){
+						if(status == 0){
+							// 接通后，状态为0
+							hostonline.add(partyForm);
+						}else{
+							hostoffline.add(partyForm);
+						}
+					}else{
+						if(status == 0){
+							guestonline.add(partyForm);
+						}else{
+							guestoffline.add(partyForm);
+						}
+					}
+					finPartyList.add(partyForm);
+				}
+
+				// 组装参数
+				confOnline.setConferenceInfo(confInfoForm);
+				confOnline.setGuestoffline(guestoffline);
+				confOnline.setGuestonline(guestonline);
+				confOnline.setHostoffline(hostoffline);
+				confOnline.setHostonline(hostonline);
+				confIn.add(confOnline);
+			}
+			// 已经结束
+			if(conf.getConfStatus() == Consts.CONFERENCE_STATUS_END){
+				ConferenceEndInfo endConf = new ConferenceEndInfo();
+				endConf.setOrderTime(orderTime);
+				// if(!DateFormatUtil.getTimeDate().equalsIgnoreCase(confTime)){
+				endConf.setConfTime(confTime);
+				// }
+				/**
+				 * 查询已经结束的会议 是否生成了 录音和会后报告
+				 */
+				String confId = String.valueOf(conf.getConfId());
+				List<ConferenceRadioInfo> radioList = radioDao.getRadioByConfId(confId);
+				/**
+				 * 如果存在
+				 */
+				for(int radioIndex = 0; radioIndex < radioList.size(); radioIndex++){
+					ConferenceRadioInfo radio = radioList.get(radioIndex);
+					endConf.setRadioUrl(radio.getFileUrl());
+					endConf.setRadioName(radio.getFileName());
+				}
+
+				List<ConferenceReportInfo> reportList = reportDao.getReportByConfId(confId);
+				for(int reportIndex = 0; reportIndex < reportList.size(); reportIndex++){
+					ConferenceReportInfo report = reportList.get(reportIndex);
+					endConf.setReportUrl(report.getReportUrl());
+					endConf.setReportName(report.getReportName());
+				}
+				endConf.setConfInfo(confInfoForm);
+				confEnd.add(endConf);
+			}
+			long reportEnd = System.currentTimeMillis();
+			// logger.info("handle conf {} duration: {}", conf.getConfId() + "|"
+			// + conf.getConfName(), (reportEnd - custBegin) + "ms");
+		}
+		confDetail.setConfOver(confEnd);
+		confDetail.setConfLive(confIn);
+	}
+
+	/**
+	 * 获取acm格式的电话号码
+	 * 
+	 * @param custInfo
+	 * @return
+	 */
+	public String getAcmPhone(CustomerInfo custInfo){
+		// 号码
+		String phone = "";
+		String area = custInfo.getCustAreacode();
+		if(area.startsWith("0")){
+			// 如果电话号码是固话，去掉区号的首位0
+			area = area.substring(1, area.length());
+		}
+		String contry = custInfo.getCustContryCode();
+		if(contry.startsWith("+")){
+			contry = contry.substring(1, contry.length());
+		}
+		contry = "(" + contry + ")";
+		if(StringUtils.isMobileNO(custInfo.getCustTel())){
+			phone = contry + custInfo.getCustTel();
+		}else{
+			phone = contry + area + custInfo.getCustTel();
+		}
+		return phone;
+	}
+
+	@Override
+	public ConferenceDetail getUnendConfDetailAfterTime4Page(String billingCode, Timestamp beginTime, int pageNum, int pageSize){
+		ConferenceDetail confDetail = new ConferenceDetail();
+		List<ConferenceInfo> confList = Lists.newArrayList();
+		List<ConferenceEndInfo> confEnd = Lists.newArrayList();
+		List<ConferenceOnline> confIn = Lists.newArrayList();
+		try{
+			confList = conferenceService.getUnendConfListAfterTime4Page(billingCode, beginTime, pageNum, pageSize);
+			handleConfList(confList, confEnd, confIn, confDetail);
+		}catch (Exception e){
+			e.printStackTrace();
+			logger.error("获取会议列表信息出错，错误信息", e.getMessage());
+		}
+		return confDetail;
+	}
+
+	@Override
+	public List<Object> getConfCustList(String name, String phone, String email, String userBc){
+		List<Object> custList = Lists.newArrayList();
+		if(StringUtils.isEmptyString(userBc)){
+			logger.info("账号bc为空,不能查询出账号关联用户历史记录");
+		}else{
+			if(!StringUtils.isEmptyString(name) || !StringUtils.isEmptyString(phone) || !StringUtils.isEmptyString(email)){
+				try{
+					custList = confCustomerService.getConfCustList(name, phone, email, userBc);
+				}catch (Exception e){
+					e.printStackTrace();
+					logger.error("查询参会人信息出错,错误信息" + e.getMessage());
+				}
+			}
+		}
+		return custList;
+	}
+
+	@Override
+	public Map<String, Integer> getOnlineAndEndConfNum(String billingCode){
+		Map<String, Integer> confNumMap = Maps.newHashMap();
+		if(!StringUtils.isEmptyString(billingCode)){
+			Timestamp beginTime = DateFormatUtil.today();
+//			Timestamp beginTimeForEnd = new Timestamp(System.currentTimeMillis());
+			int onlineConfNum = confDao.getOnlineConfNum(billingCode, beginTime);
+			int endConfNum = confDao.getEndConfNum(billingCode, beginTime);
+			confNumMap.put("onlineConf", onlineConfNum);
+			confNumMap.put("endConf", endConfNum);
+		}
+		return confNumMap;
+	}
+
+	@Override
+	public List<ConferenceInfo> getConfEndList(String billingCode, int pageNum, int pageSize){
+		List<ConferenceInfo> confEnd = Lists.newArrayList();
+		try{
+//			Timestamp beginTime = new Timestamp(System.currentTimeMillis());
+			Timestamp beginTime = DateFormatUtil.today();
+			confEnd = confDao.getEndConfListByTime(billingCode, beginTime, pageNum, pageSize);
+		}catch (Exception e){
+			e.printStackTrace();
+			logger.error("获取会议列表信息出错，错误信息", e.getMessage());
+		}
+		return confEnd;
+	}
+
+	@Override
+	public List<AppConferenceDetail> getAppOnlineConfList(String billingCode, String currPage, Timestamp beginTime){
+		List<ConferenceInfo> confList = Lists.newArrayList();
+		List<AppConferenceDetail> appConfList = Lists.newArrayList();
+		try{
+			int page = (Integer.valueOf(currPage) - 1) >= 0 ? (Integer.valueOf(currPage) - 1) : 0;
+			int beginNum = Consts.APP_CONF_LIST_COUNT_FOR_EACHPAGE * page;
+			confList = confDao.getOnlineConfListByTime(billingCode, beginNum, beginTime);
+			for(int confIndex = 0; confIndex < confList.size(); confIndex++){
+				ConferenceInfo conf = confList.get(confIndex);
+				AppConferenceDetail confDeal = new AppConferenceDetail();
+				String timeBegin = DateFormatUtil.DateToStr(conf.getBeginTime(), "HH:mm");
+				String confTime = DateFormatUtil.DateToStr(conf.getBeginTime(), "yyyy-MM-dd");
+				String timeEnd = DateFormatUtil.DateToStr(conf.getEndTime(), "HH:mm");
+				String orderTime = timeBegin + "-" + timeEnd;
+
+				confDeal.setConfId(conf.getConfId());
+				confDeal.setConfDate(confTime);
+				confDeal.setBeginTime(timeBegin);
+				confDeal.setEndTime(timeEnd);
+				confDeal.setOrderTime(orderTime);
+				confDeal.setConfName(conf.getConfName());
+				confDeal.setHostPassCode(conf.getChairmanPassword());
+				confDeal.setGuestPassCode(conf.getPartyPassword());
+
+				// 根据会议状态判断
+				if(conf.getConfStatus() == Consts.CONFERENCE_STATUS_NOTBEGIN){
+					confDeal.setConfStatus("未召开");
+				}else if(conf.getConfStatus() == Consts.CONFERENCE_STATUS_BEGINING){
+					confDeal.setConfStatus("正在开会");
+				}else if(conf.getConfStatus() == Consts.CONFERENCE_STATUS_REST){
+					confDeal.setConfStatus("会中休息");
+				}
+				appConfList.add(confDeal);
+			}
+		}catch (Exception e){
+			e.printStackTrace();
+		}
+		return appConfList;
+	}
+
+	@Override
+	public List<AppConferenceDetail> getAppEndConfList(String billingCode, String currPage, Timestamp beginTime){
+		List<ConferenceInfo> confList = Lists.newArrayList();
+		List<AppConferenceDetail> appConfList = Lists.newArrayList();
+		try{
+			int page = (Integer.valueOf(currPage) - 1) >= 0 ? (Integer.valueOf(currPage) - 1) : 0;
+			int beginNum = Consts.APP_CONF_LIST_COUNT_FOR_EACHPAGE * page;
+			confList = confDao.getEndConfListByTime(billingCode, beginNum, beginTime);
+			for(int confIndex = 0; confIndex < confList.size(); confIndex++){
+				ConferenceInfo conf = confList.get(confIndex);
+				AppConferenceDetail confDeal = new AppConferenceDetail();
+				String timeBegin = DateFormatUtil.DateToStr(conf.getBeginTime(), "HH:mm");
+				String confTime = DateFormatUtil.DateToStr(conf.getBeginTime(), "yyyy-MM-dd");
+				String timeEnd = DateFormatUtil.DateToStr(conf.getEndTime(), "HH:mm");
+				String orderTime = timeBegin + "-" + timeEnd;
+				confDeal.setConfId(conf.getConfId());
+				confDeal.setConfDate(confTime);
+				confDeal.setBeginTime(timeBegin);
+				confDeal.setEndTime(timeEnd);
+				confDeal.setOrderTime(orderTime);
+				confDeal.setConfName(conf.getConfName());
+				confDeal.setHostPassCode(conf.getChairmanPassword());
+				confDeal.setGuestPassCode(conf.getPartyPassword());
+				confDeal.setConfStatus("已结束");
+				/**
+				 * 查询已经结束的会议 是否生成了 录音和会后报告
+				 */
+				String confId = String.valueOf(conf.getConfId());
+				List<ConferenceRadioInfo> radioList = radioDao.getRadioByConfId(confId);
+				/**
+				 * 如果存在
+				 */
+				for(int radioIndex = 0; radioIndex < radioList.size(); radioIndex++){
+					ConferenceRadioInfo radio = radioList.get(radioIndex);
+					confDeal.setRadioUrl(radio.getFileUrl());
+					confDeal.setRadioName(radio.getFileName());
+				}
+				List<ConferenceReportInfo> reportList = reportDao.getReportByConfId(confId);
+				for(int reportIndex = 0; reportIndex < reportList.size(); reportIndex++){
+					ConferenceReportInfo report = reportList.get(reportIndex);
+					confDeal.setReportUrl(report.getReportUrl());
+					confDeal.setReportName(report.getReportName());
+				}
+				appConfList.add(confDeal);
+			}
+		}catch (Exception e){
+			e.printStackTrace();
+		}
+		return appConfList;
+	}
+}

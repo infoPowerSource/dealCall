@@ -1,0 +1,65 @@
+package com.deal.service.support.impl;
+
+import java.sql.Timestamp;
+
+import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.util.ObjectUtils;
+
+import com.deal.dao.support.GalleryConfDao;
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.entity.create.CustomerInfo;
+import com.deal.entity.support.GalleryConfInfo;
+import com.deal.service.support.ISupportHandleService;
+
+@Service
+public class SupportHandleServiceImpl implements ISupportHandleService{
+
+	public static final Logger logger = LoggerFactory.getLogger(SupportHandleServiceImpl.class);
+	@Autowired
+	private GalleryConfDao galDao;
+
+	@Override
+	public void saveGalleryConfInf(ConferenceInfo conference, CustomerInfo customer){
+		GalleryConfInfo galInfo = new GalleryConfInfo();
+		galInfo.setConfId(conference.getConfId());
+		galInfo.setConfBc(conference.getConfBillingcode());
+		galInfo.setCreateTime(new Timestamp(System.currentTimeMillis()));
+		galInfo.setConfEndTime(conference.getEndTime());
+		String contryCode=customer.getCustContryCode();
+		String areaCode=customer.getCustAreacode();
+		String phone=customer.getCustTel();
+		if(contryCode.startsWith("+")){
+			contryCode=contryCode.substring(1);
+		}
+		if(StringUtils.isEmpty(areaCode)){
+			phone="("+contryCode+")"+phone;
+		}else{
+		  if(areaCode.startsWith("0")){
+			  areaCode=areaCode.substring(1);
+		  }
+		  phone="("+contryCode+")"+areaCode+phone;
+		}
+		galInfo.setCustPhone(phone);
+		galInfo.setCustName(customer.getCustName());
+		try{
+			galDao.save(galInfo);
+			logger.info("存储走廊会议信息成功confid="+conference.getConfId());
+		}catch (Exception e){
+			logger.error("存储走廊会议信息出错会议id="+conference.getConfId()+"错误信息e="+e.getMessage());
+		}
+	}
+
+	@Override
+	public boolean getDataBybcAndPhone(String bc, String phone){
+		Timestamp endTime=new Timestamp(System.currentTimeMillis());
+		GalleryConfInfo galInfo=galDao.getDataByBcAndPhone(bc,phone,endTime);
+		if(!ObjectUtils.isEmpty(galInfo)){
+			return true;
+		}
+		return false;
+	}
+}

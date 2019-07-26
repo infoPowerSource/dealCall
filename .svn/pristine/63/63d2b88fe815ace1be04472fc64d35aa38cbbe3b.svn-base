@@ -1,0 +1,928 @@
+package com.deal.controller.support;
+
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpSession;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+
+import com.deal.entity.conference.ConfQueryDTO;
+import com.deal.entity.conference.ConferenceCountryCode;
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.entity.create.ConferenceSupportForm;
+import com.deal.entity.create.ConferenceSupportTaskInfo;
+import com.deal.entity.create.CustomerInfo;
+import com.deal.entity.create.CustomerSupportForm;
+import com.deal.entity.support.SupportHandlerRecord;
+import com.deal.entity.support.SupportInfo;
+import com.deal.entity.ums.UmsUserDTO;
+import com.deal.monitor.cache.RedisService;
+import com.deal.monitor.handler.IConfMonitorService;
+import com.deal.service.conference.IConfCustomerService;
+import com.deal.service.create.IConferenceService;
+import com.deal.service.support.ISupportHandleService;
+import com.deal.service.support.ISupportService;
+import com.deal.service.ums.IUmsService;
+import com.deal.util.Consts;
+import com.deal.util.DateFormatUtil;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+
+/**
+ * Created by kun.bai on 2017/5/25.
+ */
+@Controller
+public class supportController{
+	private static Logger logger = LoggerFactory.getLogger(supportController.class);
+	@Autowired
+	public IUmsService umsService;
+	@Autowired
+	public ISupportService supportService;
+	@Autowired
+	public IConfMonitorService monitorService;
+	@Autowired
+	private IConfCustomerService confPartyService;
+	@Autowired
+	public IConferenceService confService;
+	@Autowired
+	public ISupportHandleService supportHandle;
+	
+	@Value("${deal.op.siteid}")
+	private String opSiteid;
+	@Value("${deal.op.isNeedSiteid}")
+	private String isNeedSite;
+	
+	@ResponseBody
+	@RequestMapping(value = "/support/login", method = RequestMethod.GET)
+	public Map<String, Object> login(UmsUserDTO userDTO, HttpServletRequest req){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			UmsUserDTO umsUserDto = new UmsUserDTO();
+			umsUserDto.setUserName(userDTO.getUserName());
+			umsUserDto.setPassword(userDTO.getPassword());
+			umsUserDto.setProductID(Consts.OP_LOGIN_PRODUCTID);
+			if(Integer.parseInt(isNeedSite)==1){
+				//线上是ad整合，需要站点，线下测试不需要
+				umsUserDto.setSiteID(opSiteid);
+			}
+			Integer returnCode = umsService.checkLoginName(umsUserDto);
+
+			if(returnCode == 0){
+				// 登录成功
+				List<SupportInfo> supportList = supportService.getSupportListByEmail(userDTO.getUserName());
+				// 当登录名与密码通过ums认证后，获取客服账号，存入session ,调用接口激活会议并外呼电话入会
+				if(supportList != null){
+					SupportInfo support = supportList.get(0);
+					// 创建session对象
+					HttpSession session = req.getSession();
+					// 把用户数据保存在session域对象中
+					session.setAttribute("supportInfo", support);
+				}
+				result.put("success", "true");
+				result.put("msg", "登录成功");
+				logger.info(userDTO.getUserName() + "登录成功");
+			}else if(returnCode == -1){
+				result.put("success", "false");
+				result.put("msg", "登录名错误");
+			}else if(returnCode == -2){
+				result.put("success", "false");
+				result.put("msg", "密码错误");
+			}else if(returnCode == -3){
+				result.put("success", "false");
+				result.put("msg", "登录名或密码错误");
+			}else if(returnCode == -4){
+				result.put("success", "false");
+				result.put("msg", "用户不存在");
+			}else{
+				result.put("success", "false");
+				result.put("msg", "登录失败");
+			}
+
+		}catch (Exception e){
+			result.put("success", "false");
+			result.put("msg", "登录失败");
+			logger.error("登录出现异常！", e);
+			e.printStackTrace();
+			throw new RuntimeException("登录出现异常" + e);
+		}
+		return result;
+	}
+
+	@ResponseBody
+	@RequestMapping(value = "/support/logout", method = RequestMethod.GET)
+	public Map<String, Object> logout(HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			// 调用接口，传递billingcode，结束外呼自己
+			// 从session中拿到 客服登录的实体信息
+			ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+			request = attributes.getRequest();
+			logger.info("退出登录"+request);
+			SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+			monitorService.hangUpForOp(support.getMeetmeBillingcode());
+			logger.info("退出登录，挂断电话成功，bc="+support.getMeetmeBillingcode());
+			request.getSession().removeAttribute("supportInfo");
+			result.put("success", "true");
+			result.put("msg", "退出成功");
+		}catch (Exception e){
+			result.put("success", "false");
+			result.put("msg", "退出失败");
+			e.printStackTrace();
+			throw new RuntimeException("退出异常" + e);
+		}
+		return result;
+	}
+
+	/**
+	 * 导航到登录界面
+	 */
+	@RequestMapping({ "/admin" })
+	public String gotoLogin(HttpServletRequest request){
+		return "login/admin";
+	}
+
+	/**
+	 * 导航到任务池
+	 */
+	@RequestMapping({ "/support/taskList" })
+	public String getReportsList(HttpServletRequest request){
+		return "support/taskList";
+	}
+	
+	/**
+	 * 导航到任务两查询页面
+	 */
+	@RequestMapping({ "/support/queryConfNum" })
+	public String getConfNumInfo(HttpServletRequest request){
+		
+		return "support/confNumQuery";
+	}
+	
+	/**
+	 * 导航到领取任务页面
+	 */
+	@RequestMapping({ "/support/taskInfo/{confId}/{confType}/{supportID}" })
+	public String getReportsInfo(@PathVariable String confId, @PathVariable String confType, @PathVariable String supportID, HttpServletRequest request){
+		request.setAttribute("confId", confId);
+		request.setAttribute("confType", confType);
+		request.setAttribute("supportID", supportID);
+		return "support/taskHandleAlarm";
+	}
+
+	/**
+	 * 获取任务池列表，分为两种类型“交易”和“掉线” Created by kun.bai on 2017/5/25.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/list", method = RequestMethod.GET)
+	public List<ConferenceSupportForm> getAllSupportConferenceList(){
+		// 获取满足条件的交易、掉线任务
+		List<ConferenceSupportForm> supportList = Lists.newArrayList();
+		supportList = supportService.getAllConferenceSupport();
+		return supportList;
+	}
+	
+	/**
+	 * 查询任务池中，查询是否有30秒没有领取的任务，返回第一个任务
+	 * Created by kun.bai on 2017/6/9.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/firstTaskToDo", method = RequestMethod.GET)
+	public Map<String, Object> getFirstNotOpenTask(HttpServletRequest request){
+		SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+		Map<String, Object> result = Maps.newHashMap();
+		if(support ==null){
+			logger.info("外呼出现session 为空异常！");
+			return result;
+		}
+		List<ConferenceSupportTaskInfo> taskList = new ArrayList<ConferenceSupportTaskInfo>();
+		taskList = supportService.getAllNotOpenTask(support.getBridgeName());
+		if(taskList.size() >0){
+			result.put("success", "true");
+			result.put("taskInfo",taskList.get(0));
+		}else{
+			result.put("success", "false");
+		}
+		return result;
+	}
+	
+	/**
+	 * 获取会议信息 Created by kun.bai on 2017/6/07.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/conference/info/{confId}", method = RequestMethod.GET)
+	public Map<String, Object> getConferenceInfo(@PathVariable("confId") Long confId, HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		// 根据confId 获取会议信息
+		ConferenceInfo conference = new ConferenceInfo();
+		conference = supportService.getConferenceInfo(confId);
+		result.put("success", "true");
+		result.put("name",conference.getConfCreater());
+		result.put("tel",conference.getCreaterTel());
+		result.put("billingcode",conference.getConfBillingcode());
+		result.put("bridgeName",conference.getBridgeName());
+		return result;
+	}
+
+	/**
+	 * 获取任务中，会议参与人信息，包括在会，不在会的列表 Created by kun.bai on 2017/5/25.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/customer/list/{confId}", method = RequestMethod.GET)
+	public List<CustomerSupportForm> getConferenceCustomerList(@PathVariable("confId") Long confId, HttpServletRequest request){
+		// 根据confId 获取会议中所有咨询客户和专家列表
+		List<CustomerSupportForm> customerList = Lists.newArrayList();
+		customerList = supportService.getConferenceCustomerList(confId);
+
+		return customerList;
+	}
+
+	/**
+	 * 客服人员挂断接口 Created by kun.bai on 2017/5/26.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/hangUp", method = RequestMethod.GET)
+	public Map<String, Object> hangUpPhone(HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			// 调用接口，传递billingcode，结束外呼自己
+			SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+			if(support ==null){
+				logger.info("外呼出现session 为空异常！");
+				return result;
+			}
+			int status = monitorService.hangUpForOp(support.getMeetmeBillingcode());
+			if(status == 0){
+				result.put("success", "true");
+				result.put("msg", "挂断成功");
+			}else{
+				result.put("success", "false");
+				result.put("msg", "挂断失败");
+			}
+			
+		}catch (Exception e){
+			result.put("success", "false");
+			result.put("msg", "挂断失败");
+			logger.error("挂断出现异常！", e);
+			e.printStackTrace();
+			throw new RuntimeException("挂断出现异常" + e);
+		}
+		return result;
+	}
+
+	/**
+	 * 客服人员外呼自己接口 Created by kun.bai on 2017/6/8.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/callIn/{bridgeName}", method = RequestMethod.GET)
+	public Map<String, Object> supportCallIn(@PathVariable("bridgeName") String bridgeName,HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+			if(support ==null){
+				logger.info("外呼出现session 为空异常！");
+				return result;
+			}
+			if(!bridgeName.equals(support.getBridgeName())){
+				//当外呼时，session中的客服平台与外呼传递的平台不一致，更新session
+				SupportInfo support_new = supportService.getSupportInfoByEmail(support.getSupportEmail(),bridgeName);
+				// 创建session对象
+				HttpSession session = request.getSession();
+				// 把用户数据保存在session域对象中
+				session.removeAttribute("supportInfo");
+				session.setAttribute("supportInfo", support_new);
+				// 重新获取session
+				support = support_new;
+			}
+			int status = monitorService.callOutForOp(support.getMeetmeBillingcode());
+			if(status == 0){
+				result.put("success", "true");
+				result.put("msg", "外呼成功");
+			}else{
+				result.put("success", "false");
+				result.put("msg", "外呼失败");
+			}
+		}catch (Exception e){
+			result.put("success", "false");
+			result.put("msg", "外呼失败");
+			logger.error("外呼出现异常！", e);
+			e.printStackTrace();
+			throw new RuntimeException("外呼出现异常" + e);
+		}
+		return result;
+	}
+
+	/**
+	 * 客服人员保存自己电话接口 Created by kun.bai on 2017/7/25.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/saveOpTelNum", method = RequestMethod.POST)
+	public Map<String, Object> supportSaveOpTelNum(String bridgeName,String phoneNum,HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+			if(support ==null){
+				logger.info("外呼出现session 为空异常！");
+				return result;
+			}
+			int updateStatus = supportService.updateSupportTelNum(support.getSupportEmail(),bridgeName, phoneNum);
+			if(updateStatus==1){
+				//修改电话号码成功
+				SupportInfo support_new = supportService.getSupportInfoByEmail(support.getSupportEmail(),support.getBridgeName());
+				// 当登录名与密码通过ums认证后，获取客服账号，存入session ,调用接口激活会议并外呼电话入会
+				// 创建session对象
+				HttpSession session = request.getSession();
+				// 把用户数据保存在session域对象中
+				session.removeAttribute("supportInfo");
+				session.setAttribute("supportInfo", support_new);
+				
+				result.put("success", "true");
+			}else{
+				//修改失败
+				result.put("success", "false");
+			}			
+		}catch (Exception e){
+			result.put("success", "false");
+			logger.error("修改客服电话号码出现异常！", e);
+			e.printStackTrace();
+			throw new RuntimeException("修改客服电话号码出现异常" + e);
+		}
+		return result;
+	}
+
+
+	/**
+	 * 判断客服人员外呼状态
+	 *  Created by kun.bai on 2017/6/8.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/isOnline", method = RequestMethod.GET)
+	public Map<String, Object> isOnline(HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+			//logger.info("op判断是否在线，support："+support);
+			if(support != null){
+				boolean status = monitorService.isOnlineOp(support.getMeetmeBillingcode(),support.getSupportTel());
+				if(status){
+					result.put("success", "true");
+					result.put("username", support.getSupportName());
+					result.put("bridgeName", support.getBridgeName());
+					result.put("msg", "OP在线");
+				}else{
+					//logger.info("op不在线,错误码："+status);
+					result.put("success", "false");
+					result.put("username", support.getSupportName());
+					result.put("bridgeName", support.getBridgeName());
+					result.put("msg", "OP不在线");
+				}
+			}else{
+				result.put("success", "error");
+				result.put("msg", "OP没有登录");
+			}
+		}catch (Exception e){
+			result.put("success", false);
+			result.put("msg", "判断OP是否在线失败");
+			logger.error("判断OP是否在线异常！", e);
+			e.printStackTrace();
+			throw new RuntimeException("判断OP是否在线异常" + e);
+		}
+		return result;
+	}
+	
+
+	/**
+	 * 提取客服人员号码
+	 *  Created by kun.bai on 2017/7/25.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/showOpNum/{bridgeName}", method = RequestMethod.GET)
+	public Map<String, Object> showOpNum(@PathVariable("bridgeName") String bridgeName,HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+			if(support ==null){
+				logger.info("外呼出现session 为空异常！");
+				return result;
+			}
+			SupportInfo support_new = supportService.getSupportInfoByEmail(support.getSupportEmail(),bridgeName);
+			
+			if(support != null && support_new != null){
+				result.put("success", "true");
+				result.put("telNum", support_new.getSupportTel());
+			}else{
+				result.put("success", "error");
+			}
+		}catch (Exception e){
+			result.put("success", false);
+			logger.error("提取客服人员号码！", e);
+			e.printStackTrace();
+			throw new RuntimeException("提取客服人员号码" + e);
+		}
+		return result;
+	}
+
+	/**
+	 * 客服人员领取任务接口 Created by kun.bai on 2017/5/26.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/task/open/{confId}/{confType}/{supportID}", method = RequestMethod.GET)
+	public Map<String, Object> openTask(@PathVariable("confId") Long confId, @PathVariable("confType") int confType, 
+			@PathVariable("supportID") Long supportID, HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			// 提取session,获取当前处理客服信息
+			ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+			request = attributes.getRequest();
+			SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+			if(support ==null){
+				logger.info("外呼出现session 为空异常！");
+				return result;
+			}
+			int status = supportService.updateSupportStatusOpen(supportID);
+			if(status == 1){
+				// 领取任务成功，登记信息
+				SupportHandlerRecord handlerRecord = new SupportHandlerRecord();
+				// 设置会议信息
+				ConferenceInfo confInfo = new ConferenceInfo();
+				confInfo.setConfId(confId);
+				handlerRecord.setConfInfo(confInfo);
+				// 设置客服人员
+				SupportInfo supportInfo = new SupportInfo();
+				supportInfo.setSupportId(support.getSupportId());
+				handlerRecord.setSupportInfo(supportInfo);
+				// 设置操作时间
+				Timestamp nowDate = new Timestamp(System.currentTimeMillis());
+				handlerRecord.setCreateTime(nowDate);
+				// 设置会议类型（0:交易 1：掉线 2：大方 3：重要）
+				handlerRecord.setConfType(confType);
+				// 设置操作类型（0:外呼客户 1:外呼专家 2:领取任务 3:完成任务4：重置任务）
+				handlerRecord.setHandlerType(2);
+				// 外呼专家设置，领取任务不需要
+				// handlerRecord.setOutboundConfig(outboundConfig);
+				supportService.saveHandlerRecord(handlerRecord);
+				result.put("success", "true");
+				result.put("msg", "领取任务成功");
+			}else{
+				result.put("success", "false");
+				result.put("msg", "领取任务失败");
+			}
+		}catch (Exception e){
+			result.put("success", "error");
+			result.put("msg", "领取任务失败");
+			logger.error("领取任务出现异常！", e);
+		}
+		return result;
+	}
+	
+
+	/**
+	 * 客服人员延长任务处理时间接口 Created by kun.bai on 2017/5/26.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/task/hold/{confId}/{confType}/{supportID}", method = RequestMethod.GET)
+	public Map<String, Object> holdTask(@PathVariable("confId") Long confId, @PathVariable("confType") int confType, 
+			@PathVariable("supportID") Long supportID, HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			// 提取session,获取当前处理客服信息
+			ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+			request = attributes.getRequest();
+			SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+			if(support ==null){
+				logger.info("外呼出现session 为空异常！");
+				return result;
+			}
+			int status = supportService.updateSupportStatusHold(supportID);
+			if(status == 1){
+				result.put("success", "true");
+				result.put("msg", "延长任务成功");
+			}else{
+				result.put("success", "false");
+				result.put("msg", "延长任务失败");
+			}
+		}catch (Exception e){
+			result.put("success", "error");
+			result.put("msg", "延长任务失败");
+			logger.error("延长任务出现异常！", e);
+		}
+		return result;
+	}
+
+	/**
+	 * 客服人员完成任务接口 Created by kun.bai on 2017/5/26.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/task/close/{confId}/{confType}/{supportID}/{calltype}", method = RequestMethod.GET)
+	public Map<String, Object> closeTask(@PathVariable("confId") Long confId, @PathVariable("confType") int confType, 
+			@PathVariable("supportID") Long supportID, @PathVariable("calltype") int calltype,  HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			// 提取session,获取当前处理客服信息
+			SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+			if(support ==null){
+				logger.info("外呼出现session 为空异常！");
+				return result;
+			}
+			int status = 0;
+			if(calltype == 0){
+				//立即外呼，则任务直接关闭
+				status = supportService.updateSupportStatusClose(supportID);
+			}else{
+				//如果不是立即外呼，将任务置为待关闭
+				status = supportService.updateSupportStatusToWaitClose(supportID);
+			}
+			if(status ==1){
+				// 调用接口关闭任务，关闭任务成功后才登记信息
+				SupportHandlerRecord handlerRecord = new SupportHandlerRecord();
+				// 设置会议信息
+				ConferenceInfo confInfo = new ConferenceInfo();
+				confInfo.setConfId(confId);
+				handlerRecord.setConfInfo(confInfo);
+				// 设置客服人员
+				SupportInfo supportInfo = new SupportInfo();
+				supportInfo.setSupportId(support.getSupportId());
+				handlerRecord.setSupportInfo(supportInfo);
+				// 设置操作时间
+				Timestamp nowDate = new Timestamp(System.currentTimeMillis());
+				handlerRecord.setCreateTime(nowDate);
+				// 设置会议类型（0:交易 1：掉线 2：大方 3：重要）
+				handlerRecord.setConfType(confType);
+				// 设置操作类型（0:外呼客户 1:外呼专家 2:领取任务 3:完成任务4：重置任务）
+				handlerRecord.setHandlerType(3);
+				// 外呼专家设置，完成任务不需要
+				// handlerRecord.setOutboundConfig(outboundConfig);
+				supportService.saveHandlerRecord(handlerRecord);
+				result.put("success", "true");
+				result.put("msg", "完成任务成功");
+			}else{
+				result.put("success", "false");
+				result.put("msg", "完成任务失败");
+			}
+		}catch (Exception e){
+			result.put("success", "false");
+			result.put("msg", "完成任务失败");
+			logger.error("完成任务出现异常！", e);
+		}
+		return result;
+	}
+
+	/**
+	 * 客服人员返回任务池，将任务回退到未领取 Created by kun.bai on 2017/5/26.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/task/reNew/{confId}/{confType}/{supportID}", method = RequestMethod.GET)
+	public Map<String, Object> reNewTask(@PathVariable("confId") Long confId, @PathVariable("confType") int confType, 
+			@PathVariable("supportID") Long supportID, HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			// 提取session,获取当前处理客服信息
+			SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+			if(support ==null){
+				logger.info("外呼出现session 为空异常！");
+				return result;
+			}
+			int status = supportService.updateSupportStatusNew(supportID);
+			if(status == 1){
+				// 重置任务成功，登记信息
+				SupportHandlerRecord handlerRecord = new SupportHandlerRecord();
+				// 设置会议信息
+				ConferenceInfo confInfo = new ConferenceInfo();
+				confInfo.setConfId(confId);
+				handlerRecord.setConfInfo(confInfo);
+				// 设置客服人员
+				SupportInfo supportInfo = new SupportInfo();
+				supportInfo.setSupportId(support.getSupportId());
+				handlerRecord.setSupportInfo(supportInfo);
+				// 设置操作时间
+				Timestamp nowDate = new Timestamp(System.currentTimeMillis());
+				handlerRecord.setCreateTime(nowDate);
+				// 设置会议类型（0:交易 1：掉线 2：大方 3：重要）
+				handlerRecord.setConfType(confType);
+				// 设置操作类型（0:外呼客户 1:外呼专家 2:领取任务 3:完成任务 4：重置任务）
+				handlerRecord.setHandlerType(4);
+				// 外呼专家设置，重置任务不需要
+				// handlerRecord.setOutboundConfig(outboundConfig);
+				supportService.saveHandlerRecord(handlerRecord);
+				result.put("success", "true");
+				result.put("msg", "重置任务成功");
+			}else{
+				result.put("success", "false");
+				result.put("msg", "重置任务失败");
+			}
+		}catch (Exception e){
+			result.put("success", "false");
+			result.put("msg", "重置任务失败");
+			logger.error("重置任务出现异常！", e);
+		}
+		return result;
+	}
+
+	/**
+	 * 客服人员外呼客户接口 Created by kun.bai on 2017/5/26.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/task/callCustomer/{confId}/{confType}/{custId}", method = RequestMethod.GET)
+	public Map<String, Object> callCustomerTask(@PathVariable("confId") Long confId, 
+			@PathVariable("confType") int confType,@PathVariable("custId") Long custId, 
+			HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			// 提取session,获取当前处理客服信息
+			SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+			if(support ==null){
+				logger.info("外呼出现session 为空异常！");
+				return result;
+			}
+			//提取会议信息
+			ConferenceInfo conference = supportService.getConferenceInfo(confId);
+			//提取参与人的信息
+			CustomerInfo customer = supportService.getCustomerInfo(custId);
+			// 首先判断客服自己的状态是否在外呼状态，否则先外呼客服自己
+			// 调用接口，外呼客户
+			boolean status = monitorService.transferPartyToAnotherConf(support.getMeetmeBillingcode(),conference.getConfBillingcode(),customer);
+			if(status){
+				// 外呼成功后，登记信息
+				SupportHandlerRecord handlerRecord = new SupportHandlerRecord();
+				// 设置会议信息
+				ConferenceInfo confInfo = new ConferenceInfo();
+				confInfo.setConfId(confId);
+				handlerRecord.setConfInfo(confInfo);
+				// 设置客服人员
+				SupportInfo supportInfo = new SupportInfo();
+				supportInfo.setSupportId(support.getSupportId());
+				handlerRecord.setSupportInfo(supportInfo);
+				// 设置操作时间
+				Timestamp nowDate = new Timestamp(System.currentTimeMillis());
+				handlerRecord.setCreateTime(nowDate);
+				// 设置会议类型（0:交易 1：掉线 2：大方 3：重要）
+				handlerRecord.setConfType(confType);
+				// 设置操作类型（0:外呼客户 1:外呼专家 2:领取任务 3:完成任务 4：重置任务）
+				handlerRecord.setHandlerType(0);
+				// 外呼专家设置，外呼客户不需要
+				// handlerRecord.setOutboundConfig(outboundConfig);
+				supportService.saveHandlerRecord(handlerRecord);
+				supportHandle.saveGalleryConfInf(conference,customer);
+				result.put("success", "true");
+				result.put("msg", "外呼客户成功");
+			}else{
+				result.put("success", "false");
+				result.put("msg", "外呼客户失败");
+			}
+		}catch (Exception e){
+			result.put("success", "false");
+			result.put("msg", "外呼客户失败");
+			logger.error("外呼客户出现异常！", e);
+		}
+		return result;
+	}
+
+	/**
+	 * 客服人员送回会中接口 Created by kun.bai on 2017/5/26.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/task/callBackCustomer/{confId}/{custId}", method = RequestMethod.GET)
+	public Map<String, Object> callBackCustomerTask(@PathVariable("confId") Long confId,
+			@PathVariable("custId") Long custId, HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			// 提取session,获取当前处理客服信息
+			SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+			if(support ==null){
+				logger.info("外呼出现session 为空异常！");
+				return result;
+			}
+			//提取会议信息
+			ConferenceInfo conference = supportService.getConferenceInfo(confId);
+			//提取参与人的信息
+			CustomerInfo customer = supportService.getCustomerInfo(custId);
+			// 首先判断客服自己的状态是否在外呼状态，否则先外呼客服自己
+			// 调用接口，外呼客户
+			boolean status = monitorService.transferPartyToAnotherConf(conference.getConfBillingcode(),support.getMeetmeBillingcode(),customer);
+			if(status){
+				supportHandle.updateGalleryConfEndTime(conference,customer);
+				result.put("success", "true");
+				result.put("msg", "送回会中成功");
+			}else{
+				result.put("success", "false");
+				result.put("msg", "送回会中失败");
+			}
+			
+		}catch (Exception e){
+			result.put("success", "false");
+			result.put("msg", "送回会中失败");
+			logger.error("送回会中出现异常！", e);
+		}
+		return result;
+	}
+
+	/**
+	 * 客服人员外呼专家接口 Created by kun.bai on 2017/5/26.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/task/callProfessional/{confId}/{callOutType}/{confType}/{supportID}", method = RequestMethod.GET)
+	public Map<String, Object> callProfessionalTask(@PathVariable("confId") Long confId, 
+			@PathVariable("callOutType") int callOutType, @PathVariable("confType") int confType, 
+			 @PathVariable("supportID") Long supportID, HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			// 提取session,获取当前处理客服信息
+			SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+			if(support ==null){
+				logger.info("外呼出现session 为空异常！");
+				return result;
+			}
+			// 首先判断客服自己的状态是否在外呼状态，否则先外呼客服自己
+			// 调用接口，外呼专家
+			logger.info("外呼专家开始，选择外呼方式="+callOutType+",supportID="+supportID);
+			int status = supportService.callProfessional(confId,callOutType,supportID);
+			// 需要计时，采用线程后台外呼
+			if(status==1){
+				// 外呼成功后，登记信息
+				SupportHandlerRecord handlerRecord = new SupportHandlerRecord();
+				// 设置会议信息
+				ConferenceInfo confInfo = new ConferenceInfo();
+				confInfo.setConfId(confId);
+				handlerRecord.setConfInfo(confInfo);
+				// 设置客服人员
+				SupportInfo supportInfo = new SupportInfo();
+				supportInfo.setSupportId(support.getSupportId());
+				handlerRecord.setSupportInfo(supportInfo);
+				// 设置操作时间
+				Timestamp nowDate = new Timestamp(System.currentTimeMillis());
+				handlerRecord.setCreateTime(nowDate);
+				// 设置会议类型（0:交易 1：掉线 2：大方 3：重要）
+				handlerRecord.setConfType(confType);
+				// 设置操作类型（0:外呼客户 1:外呼专家 2:领取任务 3:完成任务 4：重置任务）
+				handlerRecord.setHandlerType(1);
+				// 外呼专家设置（0：立即外呼；1:5分钟后外呼 2:10分钟后外呼）
+				handlerRecord.setOutboundConfig(String.valueOf(callOutType));
+				supportService.saveHandlerRecord(handlerRecord);
+				result.put("success", "true");
+				result.put("msg", "外呼顾问成功");
+			}else if(status==0){
+				result.put("success", "none");
+				result.put("msg", "会议中没有咨询客户");
+			}else {
+				result.put("success", "false");
+				result.put("msg", "外呼顾问失败");
+			}
+		}catch (Exception e){
+			result.put("success", "false");
+			result.put("msg", "外呼顾问失败");
+			logger.error("外呼顾问出现异常！", e);
+		}
+		return result;
+	}
+	
+
+	/**
+	 * 查询是否有超过30秒没有领取的任务，返回数量
+	 * Created by kun.bai on 2017/6/8.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/getNotDealTask", method = RequestMethod.GET)
+	public Map<String, Object> getNotDealTask(HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+			int taskNum = supportService.getConferenceSupportNotOpenList();
+			result.put("success", "true");
+			result.put("taskNum", taskNum);
+			result.put("msg", "获取紧急任务成功");
+		}catch (Exception e){
+			result.put("success", "false");
+			result.put("msg", "获取紧急任务失败");
+			logger.error("获取紧急任务异常！", e);
+			e.printStackTrace();
+			throw new RuntimeException("获取紧急任务异常" + e);
+		}
+		return result;
+	}
+	
+
+	/**
+	 * 客服端外呼其他号码
+	 * 
+	 * @param phone
+	 * @param name
+	 * @param role
+	 * @param billingCode
+	 * @param model
+	 * @return
+	 */
+	@RequestMapping(value = "/support/calloutOther/", method = RequestMethod.POST)
+	@ResponseBody
+	public Integer calloutOther(String phone, String name, String role, String billingCode, Long confId, String country, String area){
+		try{
+			logger.info("监控端外呼其他号码开始, phone is" + phone + " name is " + name + " role is " + role + " billingCode is " + billingCode);
+			if(phone == null || name == null || role == null || billingCode == null) {
+				// 信息校验失败
+				logger.error("监控端外呼失败，phone " + phone);
+				return 1;
+			}
+			//提取会议信息
+			ConferenceInfo conference = supportService.getConferenceInfo(confId);
+			// 获取该用户所在平台
+			String summit = conference.getBridgeName();
+			ConferenceInfo conferenceInfo = new ConferenceInfo();
+			List<CustomerInfo> partyList = Lists.newArrayList();
+			conferenceInfo.setConfId(confId);
+			String username = name;
+			CustomerInfo customer = new CustomerInfo();
+			customer.setCustTel(phone);
+			customer.setCustContryCode(country);
+			customer.setCustAreacode(area);
+			customer.setCustEmail("");
+			customer.setCustName(username);
+			customer.setCustType(Integer.valueOf(role));
+			customer.setConfInfo(conferenceInfo);
+			partyList.add(customer);
+			// 根据手机号和姓名 去通讯录查询，判断是否是 通讯录中的 参会人，如果没有则 根据角色 进行相应添加
+			if(!confPartyService.addParty(customer)) {
+				logger.error("外呼号码重复，phone " + phone);
+				return 3;
+			}
+			if(!monitorService.control_callout(summit, billingCode, partyList)) {
+				logger.error("监控端外呼失败，phone " + phone);
+				return 1;
+			}
+			Integer status = monitorService.isOnline(billingCode, phone);
+			if(status != 0) {
+				logger.info("正在外呼，请稍候，phone " + phone);
+				return 2;
+			}
+		}catch (Exception e){
+			logger.error("监控端外呼失败，phone " + phone);
+			e.printStackTrace();
+			return 1;
+		}
+		return 0;
+	}
+
+
+	/**
+	 * 客服人员取消外呼专家接口 Created by kun.bai on 2017/9/11.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/support/task/cancelCallProfessional/{confId}/{callOutType}/{confType}/{supportID}", method = RequestMethod.GET)
+	public Map<String, Object> cancelCallProfessional(@PathVariable("confId") Long confId, 
+			@PathVariable("callOutType") int callOutType, @PathVariable("confType") int confType, 
+			 @PathVariable("supportID") Long supportID, HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		try{
+			// 提取session,获取当前处理客服信息
+			SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+			RedisService.putCache(String.valueOf(supportID)+"取消外呼", String.valueOf(supportID));
+			RedisService.putCache(String.valueOf(callOutType)+"取消外呼", String.valueOf(callOutType));
+			result.put("success", "true");
+			result.put("msg", "取消外呼顾问成功");
+		}catch (Exception e){
+			result.put("success", "false");
+			result.put("msg", "取消外呼顾问失败");
+			logger.error("取消外呼顾问出现异常！", e);
+		}
+		return result;
+	}
+	
+
+	/**
+	 * 客服查询当前时间到第二天24点的任务量
+	 */
+	@RequestMapping(value = "/support/getConfNum", method = RequestMethod.GET)
+	@ResponseBody
+	public List<ConfQueryDTO> getConfNum(HttpServletRequest request){
+		SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+		List<ConfQueryDTO> listDTO = new ArrayList<ConfQueryDTO>();
+		Timestamp beginTime = new Timestamp(System.currentTimeMillis());
+		Timestamp beginTime_total = DateFormatUtil.today();
+		Timestamp endTime = DateFormatUtil.dateReductionDay(beginTime_total, -2);
+
+		listDTO = supportService.getConfNumForOp(beginTime, endTime);
+		return listDTO;
+	}
+	/**
+	 * 查询国家码列表
+	 *
+	 * @return
+	 */
+	@RequestMapping("/support/countrycode")
+	@ResponseBody
+	public List<ConferenceCountryCode> getEndConfList(){
+
+		return confService.getCountryCode();
+	}
+}

@@ -1,0 +1,158 @@
+package com.deal.service.task;
+
+import java.util.List;
+import java.util.Map;
+
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+import org.springframework.util.ObjectUtils;
+
+import com.deal.dao.create.ConferenceBillingcodeDao;
+import com.deal.dao.create.ConferenceDao;
+import com.deal.dao.create.ConferencePasswordDao;
+import com.deal.entity.create.ConferenceBillingcodeInfo;
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.entity.create.ConferencePasswordInfo;
+import com.deal.monitor.cache.RedisService;
+import com.deal.service.acm.IACMService;
+import com.deal.service.mss.IMSSService;
+import com.deal.service.sms.ISMSService;
+import com.deal.util.Consts;
+import com.deal.util.DateFormatUtil;
+import com.google.common.collect.Maps;
+
+import net.fortuna.ical4j.model.ValidationException;
+
+@Component("recyclePassCodeJob")
+public class recycleConferencePassCodeJob{
+	private static Logger logger = LoggerFactory.getLogger(recycleConferencePassCodeJob.class);
+
+	@Autowired
+	private ConferenceDao confDao;
+	@Autowired
+	private IACMService acmService;
+	@Autowired
+	private ConferencePasswordDao passwordDao;
+	@Autowired
+	private ConferenceBillingcodeDao billingcodeDao;
+	@Value("${deal.billingcode.warning.level}")
+	private String billingcodeWarningLevel;
+	@Value("${deal.passcode.warning.level}")
+	private String passcodeWarningLevel;
+	@Value("${waring.email}")
+	private String warningEmails;
+	@Value("${waring.phone}")
+	private String warningPhones;
+	@Autowired
+	private ISMSService smsService;
+	@Autowired
+	private IMSSService mssService;
+	private String bcContent="主动服务BC池中可用bc不足10%，请及时添加";
+	private String pcContent="主动服务pc池中可用bc不足10%，请及时添加";
+	
+
+	public synchronized void execute(){
+		String key = DateFormatUtil.getTimeASKey()+"recycPassCode";
+		logger.info("开始回收密码和会议bc-------");
+		if(!RedisService.IsExistOper(key, "recyclePassCodeJob")){
+			RedisService.putOperToCache(key, "recyclePassCodeJob");
+			List<ConferenceInfo> confList = confDao.getEndConfList();
+			for(ConferenceInfo confInfo : confList){
+				String confBillingcode = confInfo.getConfBillingcode();
+				if(acmService.deleteConfByBillingcode(confBillingcode) == 0){
+					String chairmanPasscode = confInfo.getChairmanPassword();
+					String partypasscode = confInfo.getPartyPassword();
+					recyclePasscode(chairmanPasscode);
+					recyclePasscode(partypasscode);
+					confInfo.setConfHandleStatus(Consts.IS_HANDLED);
+					confDao.update(confInfo);
+					logger.info("密码回收回收会议信息,confInfo:"+confInfo.getConfId());
+				}
+			}
+		}
+		sendWarningMailAndSmsInfo();
+	}
+
+	private void sendWarningMailAndSmsInfo(){
+		int usingBillingcodeNum=billingcodeDao.getUsingbillingNum();
+		int usingPasscodeNum=passwordDao.getUsingPasscodeNum();
+		int bcWarningLevel=Integer.valueOf(billingcodeWarningLevel);
+		int pcWaringLevel=Integer.valueOf(passcodeWarningLevel);
+		if(bcWarningLevel>usingBillingcodeNum){
+		   if(warningEmails.contains(",")){
+			  String []warningEmail=warningEmails.split(",");
+			  for(int index=0;index<warningEmail.length;index++){
+				  String email=warningEmail[index];
+				  sendEmail(email,Consts.EMAIL_TYPE_FOR_INFORM_BC_WARNING);
+			  }
+		   }else{
+			   sendEmail(warningEmails,Consts.EMAIL_TYPE_FOR_INFORM_BC_WARNING);
+		   }
+		   if(warningPhones.contains(",")){
+			   String []phones=warningPhones.split(",");
+			   for(int index=0;index<phones.length;index++){
+				   String phone=phones[index];
+				   sendSMS(phone,Consts.EMAIL_TYPE_FOR_INFORM_BC_WARNING);
+			   }
+		   }else{
+			   sendSMS(warningPhones,Consts.EMAIL_TYPE_FOR_INFORM_BC_WARNING);
+		   }
+		}
+		if(pcWaringLevel>usingPasscodeNum){
+			 if(warningEmails.contains(",")){
+				  String []warningEmail=warningEmails.split(",");
+				  for(int index=0;index<warningEmail.length;index++){
+					  String email=warningEmail[index];
+					  sendEmail(email,Consts.EMAIL_TYPE_FOR_INFORM_PC_WARNING);
+				  }
+			   }else{
+				   sendEmail(warningEmails,Consts.EMAIL_TYPE_FOR_INFORM_PC_WARNING);
+			   }
+			   if(warningPhones.contains(",")){
+				   String []phones=warningPhones.split(",");
+				   for(int index=0;index<phones.length;index++){
+					   String phone=phones[index];
+					   sendSMS(phone,Consts.EMAIL_TYPE_FOR_INFORM_PC_WARNING);
+				   }
+			   }else{
+				   sendSMS(warningPhones,Consts.EMAIL_TYPE_FOR_INFORM_PC_WARNING);
+			   }
+		}
+	}
+
+	private void sendSMS(String phone,int type){
+		Map<String, Object> params=Maps.newHashMap();
+		String content=type==Consts.EMAIL_TYPE_FOR_INFORM_PC_WARNING?pcContent:bcContent;
+		   params.put("phone", phone);
+		   params.put("mailType", type);
+		   params.put("content", content);
+		   smsService.sendSMSByTask(params);
+	}
+
+	private void sendEmail(String email,int type){
+		Map<String, Object> params=Maps.newHashMap();
+		  params.put("email", email);
+		  params.put("mailType", type);
+		  try{
+		  mssService.sendMailByTask(params);
+		  }catch(ValidationException e){
+			  logger.error("告警邮件发送出错，邮箱号码"+ email+"错误信息"+e.getMessage());
+		  }
+	}
+
+	private void recyclePasscode(String chairmanPasscode){
+		ConferencePasswordInfo chairmanPassword = new ConferencePasswordInfo();
+		chairmanPassword = passwordDao.getPwdByPasswordName(chairmanPasscode);
+		if(ObjectUtils.isEmpty(chairmanPassword)){
+			logger.error("回收会议密码时，查询该会议密码记录为空，会议密码:" + chairmanPasscode);
+		}else{
+			chairmanPassword.setIsUsed(Consts.USABLE);
+			chairmanPassword.setUseTime(null);
+			logger.info("回收会议密码成功，会议密码:" + chairmanPasscode);
+		}
+	}
+}

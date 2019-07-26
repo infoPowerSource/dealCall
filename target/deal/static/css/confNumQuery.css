@@ -1,0 +1,16 @@
+@CHARSET "UTF-8";
+.pub-table tbody{
+	overflow-y:scroll !important;
+}
+
+.pub-table .user-item .connect{
+	color:#548ccc;
+}
+
+.pub-table tbody tr td:nth-child(8){
+	padding-left:6px
+}
+
+.pub-table.iframe tbody{
+	height:300px !important;
+}

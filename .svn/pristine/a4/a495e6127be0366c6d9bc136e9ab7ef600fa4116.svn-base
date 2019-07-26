@@ -1,0 +1,30 @@
+package com.deal.service.create.impl;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import com.deal.dao.create.ConferenceDao;
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.util.Consts;
+
+@Service
+public class ConferenceHandleServiceImpl implements IConferenceHandleService{
+	private static Logger logger = LoggerFactory.getLogger(ConferenceHandleServiceImpl.class);
+	
+	@Autowired
+	private ConferenceDao confDao;
+
+	@Override
+	public boolean updateConfInfo(ConferenceInfo confInfo){
+		try{
+			confInfo.setConfStatus(Consts.CONFERENCE_STATUS_BEGINING);
+			confDao.update(confInfo);
+		}catch(Exception e){
+			logger.error("送客服返回已经结束的会议时,更新会议信息时出错，confId="+confInfo.getConfId()+"错误信息"+e.getMessage());
+			return false;
+		}
+		return true;
+	}
+}

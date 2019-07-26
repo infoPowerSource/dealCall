@@ -1,0 +1,123 @@
+vm.form.hujiao.jue.v='顾问';
+
+(function(mui, doc) {
+	mui.init();
+	mui.ready(function() {
+		var userPicker = new mui.PopPicker();
+		userPicker.setData([{
+			value: '0',
+			text: '顾问'
+		}, {
+			value: '1',
+			text: '客户'
+		}]);
+		var showUserPickerButton = doc.getElementById('m-juese');
+		showUserPickerButton.addEventListener('tap', function(event) {
+			$('.f-inp').blur();
+			userPicker.show(function(items) {
+				vm.form.hujiao.jue.v=items[0].text;
+			});
+		}, false);
+	});
+
+})(mui, document);
+
+var confId = $("#confId").val();
+var billingcode = $("#billingcode").val();
+var phone,name,role,country,area;
+
+$(document).ready(function () {
+	$('#callout').click(function () {
+		phone = $('#phoneNum').val();
+		name = $('#name').val();
+		//如果姓名为空，则用电话显示
+		if(name == ""){
+			name = phone;
+		}
+		if($('#role').text() == "顾问"){
+			role = 0;
+		}else{
+			role = 1;
+		}
+		country = $('#country').val();
+		area = $('#area').val();
+		if(phone =="" || name =="" || country ==""){
+			return false;
+		}
+		var regTel = /^\+?[1-9][0-9]*$/;
+		var regArea = /^0\d{2,3}$/;
+		if (phone.length != 11 && (area == "" || area == "区号")) {
+			layer.msg('请输入区号',{time:2E3,shade:0.3});
+			return false;
+		}
+		if (phone.length == 11) {
+			if (!is_mobile(phone)) {
+				layer.msg('请输入正确的手机号码',{time:2E3,shade:0.3});
+			} else {
+				callother();
+			}
+		} else {
+			if (regTel.test(phone)) {
+				if (!regArea.test(area)) {
+					layer.msg('电话区号不正确，请修正!',{time:2E3,shade:0.3});
+					return false;
+				} else {
+					callother();
+				}
+			} else {
+				layer.msg('电话号码格式不正确,请修正!',{time:2E3,shade:0.3});
+			}
+		}		
+	});
+	
+	$("#callback").click(function () {
+		window.location.href = BASE_PATH + "/conf/confDetail/" + confId;
+	});
+	
+});
+
+function is_mobile(phone) {
+    if (!(/^1[345789]\d{9}$/.test(phone))) {
+        return false;
+    } else {
+        return true;
+    }
+}
+
+function callother(){
+	var url = BASE_PATH + "/app/conf/calloutOther";
+	$.ajax({
+		type : 'POST',
+		dataType : 'json',
+		url : url,
+		// 提交的数据
+		data : {
+			phone : phone,
+			name : name,
+			role : role,
+			country : country,
+			area : area,
+			billingCode : billingcode,
+			confId : confId
+		},
+		success : function(data) {
+			if (data == 0) {
+				layer.msg('呼叫成功！', {time: 2E3, shade: 0.3});
+				window.location.href = BASE_PATH + "/conf/confDetail/" + confId;
+			}
+			if (data == 2) {
+				layer.msg('正在呼叫！', {time: 2E3, shade: 0.3});
+				window.location.href = BASE_PATH + "/conf/confDetail/" + confId;
+			}
+			if (data == 1) {
+				layer.msg("外呼失败，请联系管理员", {time: 2E3, shade: 0.3});
+			}
+			if (data == 3) {
+				layer.msg("电话号码重复", {time: 2E3, shade: 0.3});
+			}
+			if (data == 4) {
+				layer.msg("外呼姓名重复", {time: 2E3, shade: 0.3});
+			}
+		}
+	});
+}

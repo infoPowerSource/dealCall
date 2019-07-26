@@ -1,0 +1,549 @@
+package com.deal.service.support.impl;
+
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+import javax.annotation.Resource;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.stereotype.Service;
+
+import com.deal.dao.support.SupportDao;
+import com.deal.entity.conference.ConfQueryDTO;
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.entity.create.ConferenceSupportForm;
+import com.deal.entity.create.ConferenceSupportTaskInfo;
+import com.deal.entity.create.CustomerInfo;
+import com.deal.entity.create.CustomerSupportForm;
+import com.deal.entity.party.CacheParty;
+import com.deal.entity.party.CahcheConference;
+import com.deal.entity.support.SupportHandlerRecord;
+import com.deal.entity.support.SupportInfo;
+import com.deal.monitor.cache.CacheConferenceManage;
+import com.deal.monitor.cache.RedisService;
+import com.deal.monitor.handler.IConfMonitorService;
+import com.deal.service.conference.IConfInfoDetail;
+import com.deal.service.support.ISupportService;
+import com.deal.util.DateFormatUtil;
+import com.deal.util.StringUtils;
+import com.google.common.collect.Lists;
+
+@Service
+public class ISupportServiceImpl implements ISupportService{
+	public static final Logger logger = LoggerFactory.getLogger(ISupportServiceImpl.class);
+	@Autowired
+	SupportDao supportDao;
+	@Resource(name = "threadPoolTaskExecutor")
+	private ThreadPoolTaskExecutor threadPoolTaskExecutor;
+
+	@Autowired
+	private IConfInfoDetail confInfoDetailServie;
+	@Autowired
+	public IConfMonitorService monitorService;
+	
+	/*
+	 * 根据email查询客服人员信息 参数：email
+	 */
+	public List<SupportInfo> getSupportListByEmail(String email){
+		return supportDao.getSupportListByEmail(email);
+	}
+
+	/*
+	 * 根据email查询客服人员信息 参数：email,bridgeName
+	 */
+	public SupportInfo getSupportInfoByEmail(String email,String bridgeName){
+		return supportDao.getSupportByEmail(email,bridgeName);
+	}
+
+	/*
+	 * 根据confId ,查询会议信息
+	 */
+	public ConferenceInfo getConferenceInfo(Long confId){
+		return supportDao.getConferenceInfo(confId);
+	}
+	
+	/*
+	 * 根据custId ,查询参与人信息
+	 */
+	public CustomerInfo getCustomerInfo(Long custId){
+		return supportDao.getCustomerInfo(custId);
+	}
+	/*
+	 * 提取所有“交易”类型的会议列表，和“掉线”类型的会议列表 参数：
+	 */
+	public List<ConferenceSupportForm> getAllConferenceSupport(){
+		List<ConferenceSupportForm> supportList = new ArrayList<ConferenceSupportForm>();
+		List<ConferenceSupportForm> supportList_new = new ArrayList<ConferenceSupportForm>();
+		try{
+			// 首先检查是否有领取了任务，且执行时间大于90秒的，任务返回任务池
+			supportDao.reNewSupportStatus();
+			// 1、获取所有当前已经召开的交易类型的会议列表，和掉线任务
+			supportList = supportDao.getConferenceSupportList();
+			// 2、根据任务池获取的会议id，到缓存中读取那些会议已经召开，并且已有咨询者入会，立即生成任务
+			for(ConferenceSupportForm supportInfo : supportList){
+				// 从缓存中获取该会议信息，判断是否符合
+//				LocalCacheConference cacheConference = CacheConferenceManage.getLocalCacheConference(supportInfo.getConfBillingcode());
+				CahcheConference cacheConference = CacheConferenceManage.getLocalCacheConference(supportInfo.getConfBillingcode());
+				// 读取会议创建时，设定的会议参与人列表
+				List<CustomerInfo> customerList = supportDao.getConferenceCustomerList(supportInfo.getConfID());
+				int conf_allnum = customerList.size();
+				int online_num = 0;
+				int perf_allnum = 0;//专家总人数
+				int perf_noline_num = 0;//专家不在线人数
+				boolean isZixunOnline = false; //是否有咨询客户在线
+				if(cacheConference!=null){
+					for(CustomerInfo customerInfo : customerList){
+						String phoneNumber = StringUtils.convertAcmPhone(customerInfo.getCustContryCode(), customerInfo.getCustAreacode(), customerInfo.getCustTel());
+						if(customerInfo.getCustType()==0){
+							perf_allnum = perf_allnum+1;
+							for(CacheParty party:cacheConference.getPartyList()){
+								if(phoneNumber.equalsIgnoreCase(party.getPhoneNumber())&&party.getConnectState()>2){
+									perf_noline_num = perf_noline_num+1;
+									break;
+								}
+							}
+						}
+					}
+					for(CacheParty party:cacheConference.getPartyList()){
+						if(party.getConnectState()>2){
+							// 不处于挂断状态，那么在线人数加一
+							online_num = online_num + 1;
+							if(party.getPartyRole() ==1){
+								//咨询客户在线
+								isZixunOnline = true;
+							}
+						}
+						
+					}
+				}
+				
+				//如果在线人数为空，或者专家都在线，那么任务需要关闭，不能显示
+				if(online_num>0 && perf_noline_num != perf_allnum){
+					supportInfo.setOnlineMan(online_num);
+					supportInfo.setOfflineMan(conf_allnum - online_num);
+					supportList_new.add(supportInfo);
+				}else{
+					if(supportInfo.getConfStatus()==0){
+						// 传递supportID关闭任务池
+						supportDao.updateSupportStatusClose(supportInfo.getSupportID());
+					}					
+				}
+				
+				//如果任务是“掉线型”，会议中却没有咨询客户，关闭任务
+				//会议类型  （0:交易 1：掉线 2：大方 3：重要）
+				if(supportInfo.getConfType() == 1 && !isZixunOnline){
+					// 传递supportID关闭任务
+					supportDao.updateSupportStatusClose(supportInfo.getSupportID());
+				}
+			}
+		}catch (Exception ex){
+			ex.printStackTrace();
+			logger.error("读取任务池失败");
+		}
+		return supportList_new;
+	}
+
+	/*
+	 * 获取任务中，会议参与人信息，包括在会，不在会的列表
+	 */
+	public List<CustomerSupportForm> getConferenceCustomerList(Long confId){
+		List<CustomerSupportForm> customerList = new ArrayList<CustomerSupportForm>();
+		List<CustomerInfo> supportList = new ArrayList<CustomerInfo>();
+		try{
+			supportList = supportDao.getConferenceCustomerList(confId);
+			ConferenceInfo conference = supportDao.getConferenceInfo(confId);
+			// 从数据库中已经获取了参与人列表，需要根据缓存，提取状态
+			//LocalCacheConference cacheConference = CacheConferenceManage.getLocalCacheConference(conference.getConfBillingcode());
+			//CahcheConference cacheConference = CacheConferenceManage.getLocalCacheConference(conference.getConfBillingcode());
+			// 根据参与人列表，每个人判断是否在线
+			for(CustomerInfo customer : supportList){
+				CustomerSupportForm customerInfo = new CustomerSupportForm();
+				customerInfo.setConfId(confId);
+				customerInfo.setCustAreacode(customer.getCustAreacode());
+				customerInfo.setCustContryCode(customer.getCustContryCode());
+				customerInfo.setCustEmail(customer.getCustEmail());
+				customerInfo.setCustId(customer.getCustId());
+				customerInfo.setCustName(customer.getCustName());
+				customerInfo.setCustType(customer.getCustType());
+				customerInfo.setCustTel(customer.getCustTel());
+				customerInfo.setCustStatus(1);
+				customerInfo.setCustSpeakStatus("-");
+
+				String phone = confInfoDetailServie.getAcmPhone(customer);
+				Integer status = monitorService.isOnline(conference.getConfBillingcode(), phone);
+				customerInfo.setCustStatus(status);
+				/*if(cacheConference!=null){
+					for(CacheParty party:cacheConference.getPartyList()){
+						String phoneNumber = StringUtils.convertAcmPhone(customerInfo.getCustContryCode(), customerInfo.getCustAreacode(), customerInfo.getCustTel());
+						if(phoneNumber.equalsIgnoreCase(party.getPhoneNumber())){
+							//判断通讯录的人 是否在会议中 2 会议不存在 0 参会人在线 1不在线2连接中3拒接
+							if(party.getConnectState() == 2){
+								customerInfo.setCustStatus(2);
+								customerInfo.setCustSpeakStatus("-");
+							}else if(party.getConnectState() > 2){
+								customerInfo.setCustStatus(0);
+								customerInfo.setCustSpeakStatus("发言");
+							}else{
+								if(party.getDisconnectReason() > 0){
+									//被外呼过，没通
+									customerInfo.setCustStatus(3);
+									customerInfo.setCustSpeakStatus("-");
+								}else{
+									//没有被外呼过
+									customerInfo.setCustStatus(1);
+									customerInfo.setCustSpeakStatus("-");
+								}
+							}
+							break;
+						}
+					}
+				}*/
+				
+				customerList.add(customerInfo);
+			}
+		}catch (Exception ex){
+			ex.printStackTrace();
+			logger.error("读取会议参与人列表失败");
+		}
+		return customerList;
+	}
+
+	/*
+	 * 根据confId领取任务，如果可以领取则变更会议状态为已领取 参数：confId
+	 */
+	public Integer updateSupportStatusOpen(Long supportID){
+		Integer status = 0;
+		try{
+			// 传递confid检查是否被领取，没有领取则将状态改为“已领取”
+			status = supportDao.updateSupportStatusOpen(supportID);
+		}catch (Exception ex){
+			ex.printStackTrace();
+			logger.error("领取任务失败，任务已经被别人领取");
+		}
+		return status;
+	}
+	
+
+	/*
+	 * 领取任务后，时间超过一分钟后，仍然要处理，更新时间； 参数：confId
+	 */
+	public Integer updateSupportStatusHold(Long supportID){
+		Integer status = 0;
+		try{
+			status = supportDao.updateSupportStatusHold(supportID);
+		}catch (Exception ex){
+			ex.printStackTrace();
+		}
+		return status;
+	}
+
+	/*
+	 * 根据supportId关闭任务池任务 参数：supportId
+	 */
+	public Integer updateSupportStatusClose(Long supportID){
+		Integer status = 0;
+		try{
+			// 传递supportID关闭任务池
+			status = supportDao.updateSupportStatusClose(supportID);
+		}catch (Exception ex){
+			ex.printStackTrace();
+			logger.error("关闭任务池失败");
+		}
+		return status;
+	}
+	
+
+	/*
+	 * 根据supportId关闭任务池任务,置为待关闭状态 参数：supportId
+	 */
+	public Integer updateSupportStatusToWaitClose(Long supportID){
+		Integer status = 0;
+		try{
+			// 传递supportID关闭任务池,置为待关闭状态
+			status = supportDao.updateSupportStatusToWaitClose(supportID);
+		}catch (Exception ex){
+			ex.printStackTrace();
+			logger.error("关闭任务池失败");
+		}
+		return status;
+	}
+
+	/*
+	 * 任务处理没完成，将状态修改为未处理，返回任务池，等待别人领取 参数：confId
+	 */
+	public Integer updateSupportStatusNew(Long supportID){
+		Integer status = 0;
+		try{
+			// 传递confid检查是否修改成功，没有则更新成功
+			status = supportDao.updateSupportStatusNew(supportID);
+		}catch (Exception ex){
+			ex.printStackTrace();
+			logger.error("回退任务失败，任务没有被还原为未处理状态");
+		}
+		return status;
+	}
+
+	/*
+	 * 将客服人员的操作记录到表中 参数：SupportHandlerRecord
+	 */
+	public void saveHandlerRecord(SupportHandlerRecord handlerRecord){
+		try{
+			// 保存操作记录
+			supportDao.saveHandlerRecord(handlerRecord);
+		}catch (Exception ex){
+			ex.printStackTrace();
+			logger.error("操作记录没有被保存");
+		}
+	}
+
+	/*
+	 * 查询任务池中，是否有超出30秒没有领取的任务
+	 */
+	public Integer getConferenceSupportNotOpenList(){
+		Integer notnum = 0;
+		try{
+			notnum = supportDao.getConferenceSupportNotOpenList().size();
+		}catch (Exception ex){
+			ex.printStackTrace();
+			logger.error("查询紧急任务失败");
+		}
+		return notnum;
+	}
+	
+	/*
+	 * 更新客服人员的电话号码 参数：supportInfo
+	 */
+	public Integer updateSupportTelNum(String email,String bridgeName,String telNum){
+		Integer status = 0;
+		try{
+			// 检查是否修改成功
+			status = supportDao.updateSupportTelNum(email,bridgeName,telNum);
+		}catch (Exception ex){
+			ex.printStackTrace();
+			logger.error("修改客服电话失败");
+		}
+		return status;
+	}
+
+
+	/*
+	 * 查询任务池中，查询超出30秒没有领取的任务
+	 */
+	public List<ConferenceSupportTaskInfo> getAllNotOpenTask(String bridgeName){
+		List<ConferenceSupportTaskInfo> taskList = new ArrayList<ConferenceSupportTaskInfo>();
+		try{
+			taskList = supportDao.getSupportNotOpenListWithBridge(bridgeName);
+		}catch (Exception ex){
+			ex.printStackTrace();
+			logger.error("查询紧急任务失败");
+		}
+		return taskList;
+	}
+	
+	/*
+	 * 查询任务量
+	 */
+	public List<ConfQueryDTO> getConfNumForOp(Timestamp beginTime, Timestamp endTime){
+		List<ConfQueryDTO> confDto = Lists.newArrayList();
+		List<ConferenceInfo> confList = Lists.newArrayList();
+		try{
+			confList = supportDao.getConfNumByTime(beginTime, endTime);
+			String[] timeList ={"00:00 - 02:00","02:00 - 04:00","04:00 - 06:00","06:00 - 08:00"
+					,"08:00 - 10:00","10:00 - 12:00","12:00 - 14:00","14:00 - 16:00"
+					,"16:00 - 18:00","18:00 - 20:00","20:00 - 22:00","22:00 - 24:00"};
+			//获取当前时间
+			//取得Timestamp类型的当前系统时间
+			Timestamp today = new Timestamp(System.currentTimeMillis());
+			String now_date = DateFormatUtil.DateToStr(today, "yyyy-MM-dd");
+			String now_Hour = DateFormatUtil.DateToStr(today, "HH:mm");
+			//取得明天的日期
+			Timestamp nextTime = DateFormatUtil.dateReductionDay(beginTime, -1);
+			String next_date = DateFormatUtil.DateToStr(nextTime, "yyyy-MM-dd");
+			//解析列表，组装页面时间段的信息
+			//在今天循环中赋值
+			for(int i=0;i<timeList.length;i++){
+				String time_begin = timeList[i].substring(0,5);
+				String time_end = timeList[i].substring(8,13);
+				int ifdayu = now_Hour.compareTo(time_begin);
+				int ifxiaoyu = time_end.compareTo(now_Hour);
+				if(time_end.compareTo(now_Hour)>=0){
+					//过滤今天已经过去的时间段，只保留以后的时间段
+					ConfQueryDTO conf = new ConfQueryDTO();
+					String visabletime=timeList[i];
+					int all_num = 0;
+					int op_num = 0;
+					for(ConferenceInfo confInfo : confList){						
+						String timeHour = DateFormatUtil.DateToStr(confInfo.getBeginTime(), "HH:mm");
+						String timeDate = DateFormatUtil.DateToStr(confInfo.getBeginTime(), "yyyy-MM-dd");
+						//判断是否是今天的数据，且符合时间段
+						if(timeDate.equals(now_date) && timeHour.compareTo(time_begin)>=0 && timeHour.compareTo(time_end)<0){
+							//符合这个区间，
+							all_num +=1;
+							if(confInfo.getConfConfig()==4){
+								op_num +=1;
+							}
+						}
+					}
+					//本时段已经循环完毕，将数值传给list
+					conf.setBegin_time(visabletime);
+					conf.setAll_num(all_num);
+					conf.setOp_num(op_num);
+					confDto.add(conf);
+				}
+			}
+			
+			//在明天的循环中赋值
+			for(int i=0;i<timeList.length;i++){
+				ConfQueryDTO conf = new ConfQueryDTO();
+				String visabletime=timeList[i];
+				int all_num = 0;
+				int op_num = 0;
+				String time_begin = timeList[i].substring(0,5);
+				String time_end = timeList[i].substring(8,13);
+				for(ConferenceInfo confInfo : confList){						
+					String timeHour = DateFormatUtil.DateToStr(confInfo.getBeginTime(), "HH:mm");
+					String timeDate = DateFormatUtil.DateToStr(confInfo.getBeginTime(), "yyyy-MM-dd");
+					//判断是否是明天的数据，且符合时间段
+					if(!timeDate.equals(now_date) && timeHour.compareTo(time_begin)>=0 && timeHour.compareTo(time_end)<0){
+						//符合这个区间
+						all_num +=1;
+						if(confInfo.getConfConfig()==4){
+							op_num +=1;
+						}
+					}
+				}
+				//本时段已经循环完毕，将数值传给list
+				if(time_begin.compareTo("00:00")==0){
+					//第二天首行，要添加日期
+					visabletime = visabletime + "("+next_date.substring(5,7)+"月"+next_date.substring(8,10)+"日)";
+				}
+				conf.setBegin_time(visabletime);
+				conf.setAll_num(all_num);
+				conf.setOp_num(op_num);
+				confDto.add(conf);
+			}
+		}catch (Exception e){
+			e.printStackTrace();
+			logger.error("获取会议量信息出错，错误信息", e.getMessage());
+		}
+		return confDto;
+	}
+	
+	/*
+	 * 外呼专家，根据calltype判断外呼模式，如果需要等待，启用线程倒计时，到时间后外呼专家
+	 */
+	public Integer callProfessional(Long confId, int calltype, Long supportID){
+		Integer status = 1;
+		int minutes = 0;
+		try{
+			//根据confID获取会议
+			ConferenceInfo conference = supportDao.getConferenceInfo(confId);
+						
+			//根据confID获取专家列表
+			List<CustomerInfo> customerList = supportDao.getConferenceCustomerList(confId);
+			List<CustomerInfo> partyList = new ArrayList<CustomerInfo>();
+			for(CustomerInfo customer : customerList){
+				if(customer.getCustType()==0){
+					partyList.add(customer);
+				}
+			}
+			if(calltype == 0){
+				// 外呼专家设置（0：立即外呼；1:5分钟后外呼 2:10分钟后外呼）
+				minutes = 1;
+			}else{
+				// 需要等待，等待时间根据calltype计算
+				minutes = calltype * 60;
+			}
+			// 开启线程，倒计时
+			CallOutTimesRunnable callOutTimesRunnable = new CallOutTimesRunnable(minutes,conference.getConfBillingcode(),partyList,conference.getBridgeName(),supportID,calltype);
+			threadPoolTaskExecutor.execute(callOutTimesRunnable);
+		}catch (Exception ex){
+			ex.printStackTrace();
+			logger.error("外呼专家异常");
+		}
+		return status;
+	}
+
+	/*
+	 * 根据传递的秒数倒计时
+	 */
+
+	public void CountDown(int limitSec) throws InterruptedException{
+		while(limitSec > 0){
+			System.out.println("外呼还剩余 "+ --limitSec +" 秒");
+			TimeUnit.SECONDS.sleep(1);
+			//--limitSec;
+		}
+	}
+
+	private class CallOutTimesRunnable implements Runnable{
+		private int times;
+		private String billingcode;
+		private List<CustomerInfo> partyList;
+		private String bridgeName;
+		private Long supportID;
+		private int callType;
+
+		public CallOutTimesRunnable(int times,String billingcode,List<CustomerInfo> partyList,String bridgeName,Long supportID,int callType) {
+			this.times = times;
+			this.billingcode = billingcode;
+			this.partyList = partyList;
+			this.bridgeName = bridgeName;
+			this.supportID = supportID;
+			this.callType = callType;
+		}
+
+		@Override
+		public void run(){
+			try{
+				// 开始倒计时
+				CountDown(times);
+				// 从缓存中获取该会议信息，判断是否符合
+				CahcheConference cacheConference = CacheConferenceManage.getLocalCacheConference(billingcode);
+				int online_num = 0;
+				if(cacheConference!=null){
+					for(CacheParty party:cacheConference.getPartyList()){
+						if(party.getConnectState()>2){
+							online_num = online_num + 1;
+						}
+					}
+				}
+				//判断是否有取消这个外呼
+				Boolean isCancel = false;
+				if(RedisService.isExist(String.valueOf(supportID)+"取消外呼")){
+					if(RedisService.isExist(String.valueOf(callType)+"取消外呼")){
+						isCancel = true;
+						//清除redis缓存中对这个任务外呼的限制
+						RedisService.removeCache(String.valueOf(callType)+"取消外呼");
+					}
+				}
+				
+				//会议中没有在线客户，不用外呼专家
+				if(online_num>0 && !isCancel){
+					// 外呼专家
+					logger.info("开始外呼专家，呼叫等待时间："+times);
+					logger.info("开始外呼专家，平台="+bridgeName+",billingcode="+billingcode+"外呼列表="+partyList);
+					Boolean calloutStatus = monitorService.control_callout(bridgeName,billingcode, partyList);
+					if(calloutStatus){
+						//外呼成功，将任务真正的置为关闭状态
+						ISupportServiceImpl.this.supportDao.updateSupportStatusForCallOut(supportID);
+					}else{
+						//外呼失败，将任务退回任务池
+						ISupportServiceImpl.this.supportDao.updateSupportStatusToNew(supportID);
+					}
+					RedisService.removeCache(String.valueOf(supportID)+"取消外呼");
+				}else{
+					//没有人在线，不外呼，将任务真正的置为关闭状态
+					ISupportServiceImpl.this.supportDao.updateSupportStatusForCallOut(supportID);
+				}				
+			}catch (Exception e){
+				e.printStackTrace();
+			}
+		}
+	}
+}

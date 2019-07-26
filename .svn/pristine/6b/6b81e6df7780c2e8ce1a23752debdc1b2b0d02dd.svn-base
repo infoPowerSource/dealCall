@@ -1,0 +1,62 @@
+#-------------------deal url------------------------------------------------------
+db_driver=com.mysql.jdbc.Driver
+db_url=jdbc:mysql://192.168.17.58:3306/deal?useUnicode=true&characterEncoding=utf-8&autoReconnect=true
+#db_url=jdbc:mysql://192.168.17.96:2234/deal?useUnicode=true&characterEncoding=utf-8&autoReconnect=true
+db_userName=root
+db_password=111111
+#db_userName=acboss 
+#db_password=acboss
+#----------------------------------------------------------------------------------
+
+#-----------------mss url--------------------------------------------------------------
+db.mss.driverClass=com.mysql.jdbc.Driver
+db.mss.url=jdbc:mysql://192.168.39.60:3306/mss?useUnicode=true&characterEncoding=UTF-8
+db.mss.username=root
+db.mss.password=111111
+#--------------------------------------------------------------------------------------
+
+#----------------sms url and business code-------------------------------
+deal.sendNoteUrl=http://172.31.64.18:8080/ListenerRMIModule/rest/sendMsg
+deal.businesscode=39
+#------------------------------------------------------------------------
+
+#------email server and send address--------------------------
+email.server.address=smtp.quanshi.com
+email.defaultEmailSenderAddress=roadshow@lab.quanshievent.cn
+#-------------------------------------------------------------
+
+#------------ACM configer-------------------------------------
+deal.beforeJoinConference=10
+#-------------------------------------------------------------
+
+#---------syncBoss  and syncBoss.RestTemplate-----
+syncBoss.componentName=deal
+syncBoss.restTemplate.connectTimeout=60000
+syncBoss.restTemplate.readTimeout=60000
+#-------------------------------------------------
+
+#--------------ums.url-----------------------------
+url.ums=http://192.168.28.173:8081/umsapi/rs
+#--------------------------------------------------
+
+#------------Boss.url------------------------------
+deal.resvConfInBossUrl=http://192.168.17.111:8080/core-service/api/userConfs
+deal.getAccessFromBossUrl=http://192.168.17.111:8080/core-service/api/accessNumbers/getByType/1
+#--------------------------------------------------
+
+#---------------------------------------------------datasource------------
+dataSource.className=com.jolbox.bonecp.BoneCPDataSource
+#--------------------------------------------------------------------------
+
+#---------------------------------------------------more accessNumer-------
+platform2moreAccessNumber=http://t.cn/RYizI2z
+platform7moreAccessNumber=http://t.cn/RYizJkW
+#--------------------------------------------------------------------------
+
+#---------------------------------------------------warning config----------
+deal.billingcode.warning.level=47485
+deal.passcode.warning.level=10000
+#--------Multiple separated by ,-------------------------------------------
+waring.email=dong.zheng_1@quanshi.com    
+waring.phone=15691726219
+#--------------------------------------------------------------------------

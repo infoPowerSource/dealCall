@@ -1,0 +1,27 @@
+.u-icon {
+    margin-top: 3px;
+    width: 23px;
+    height: 21px;
+}
+.mui-bar-nav.mui-bar .mui-icon1 {
+    margin-right: -10px;
+    margin-left: -10px;
+    padding-right: 10px;
+    padding-left: 10px;
+}
+.mui-bar-nav.mui-bar .mui-icon2 {
+    margin-right: -10px;
+    margin-left: -10px;
+    padding-right: 10px;
+    padding-left: 10px;
+}
+.mui-pull-right-1{
+	margin-right:5px !important;
+	padding-right:5px !important;
+	float:right;
+}
+.no-data{
+    padding-top: 6pt;
+    text-align: center;
+    background-color: #f2f3f5;
+}

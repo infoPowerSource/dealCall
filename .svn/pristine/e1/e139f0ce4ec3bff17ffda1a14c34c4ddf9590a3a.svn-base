@@ -1,0 +1,175 @@
+package com.deal.service.task;
+
+import java.sql.Timestamp;
+import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.entity.create.ConferenceWaitMake;
+import com.deal.entity.create.ConferenceWaitMakeId;
+import com.deal.monitor.cache.RedisService;
+import com.deal.service.create.IConferenceService;
+import com.deal.service.report.IConfCdrService;
+import com.deal.service.report.IConferenceRecordService;
+import com.deal.service.report.impl.ConferenceTaskManagerServiceImpl;
+import com.deal.util.AttemperUtil;
+import com.deal.util.Consts;
+
+/**
+ * 调度后台执行会议相关调度任务
+ * 
+ * @author zhipeng.xu
+ */
+@Component("conferenceReportJob")
+public class ConferenceReportJob{
+
+	@Autowired
+	private AttemperUtil attemperUtil;
+	@Autowired
+	private ConferenceTaskManagerServiceImpl conferenceTaskManager;
+	@Autowired
+	private IConferenceService conferenceManager;
+	@Autowired
+	private IConfCdrService confCdrService;
+	@Autowired
+	private IConferenceRecordService conferenceRecord;
+	@Autowired
+	/**
+	 * 日志
+	 */
+	private static Logger logger = LoggerFactory.getLogger(ConferenceReportJob.class);
+
+	public synchronized void execute(){
+		try{
+			// if(!attemperUtil.check(1)) {
+			// logger.info("------主动服务 会后报告任务调度 ------不该此调度操作,取消调度执行-------");
+			// }
+			long handleTime = System.currentTimeMillis() / 1000;
+			String key = "conferenceReportJob" + String.valueOf(handleTime);
+			if(!RedisService.IsExistOper(key, "conferenceReportJob")){
+				RedisService.putOperToCache(key,"conferenceReportJob");
+				logger.info("会议报告任务调度开始");
+				List<ConferenceWaitMake> conferenceWaitMakeList = conferenceTaskManager.getConferenceWaitMake();
+				if(conferenceWaitMakeList != null && conferenceWaitMakeList.size() > 0){
+					for(int i = 0; i < conferenceWaitMakeList.size(); i++){
+						ConferenceWaitMake conferenceWaitMake = conferenceWaitMakeList.get(i);
+						ConferenceWaitMakeId conferenceWaitMakeid = conferenceWaitMake.getId();
+						Long conferenceId = conferenceWaitMakeid.getConferenceId();
+						Integer type = conferenceWaitMakeid.getTimerType();
+						ConferenceInfo conference = conferenceManager.getConfInfoById(String.valueOf(conferenceId));
+						/**
+						 * 如果需要执行任务时间不为null，检验是否到了执行时间
+						 */
+						if(conferenceWaitMake.getGenerationTime() != null){
+							Timestamp now = new Timestamp(System.currentTimeMillis());
+							Timestamp generationTime = conferenceWaitMake.getGenerationTime();
+							if(now.getTime() < generationTime.getTime()){
+								/**
+								 * 未到执行时间不执行任务
+								 */
+								continue;
+							}
+						}
+						if(conference != null){
+							switch(type){
+								case 1:
+									// 1:会议录音生成
+									boolean flag = false;
+									try{
+										if(conferenceWaitMake.getIfMake() == 1 || conferenceWaitMake.getIfMake() == 2){
+											break;
+										}
+										logger.info("会议录音开始处理！confId=" + conference.getConfId() + ",IfMake=" + conferenceWaitMake.getIfMake());
+										flag = conferenceRecord.addRecordFileForNoActiveConf(conferenceWaitMake, conference);
+										logger.info("会议录音处理结果！confId=" + conference.getConfId() + ",flag=" + flag);
+										if(flag){
+											conferenceWaitMake.setIfMake((short) 1);
+											// 成功置为1
+											conferenceWaitMake.setTaskResult("1");
+											conferenceWaitMake.setMakeTime(new Timestamp(System.currentTimeMillis()));
+											conferenceTaskManager.update(conferenceWaitMake);
+											logger.info("会议录音处理成功！confId=" + conference.getConfId());
+										}else{
+											countFailureTimes(conferenceWaitMake, conference);
+											logger.info("会议录音处理失败！confId=" + conference.getConfId());
+										}
+									}catch (Exception e){
+										logger.error("会议录音生成异常！confId=" + conference.getConfId(), e);
+										countFailureTimes(conferenceWaitMake, conference);
+										break;
+									}
+									break;
+								case 2:
+									// 1:会后报告生成
+									try{
+										if(conferenceWaitMake.getIfMake() == 1 || conferenceWaitMake.getIfMake() == 2){
+											break;
+										}
+										// 准备会报告数据
+										flag = confCdrService.getReportData(conferenceWaitMake);
+
+										if(flag){
+											conferenceWaitMake.setIfMake((short) 1);
+											// 成功置为1
+											conferenceWaitMake.setTaskResult("1");
+											conferenceWaitMake.setMakeTime(new Timestamp(System.currentTimeMillis()));
+											conferenceTaskManager.update(conferenceWaitMake);
+										}else{
+											countFailureTimes(conferenceWaitMake, conference);
+										}
+									}catch (Exception e){
+										logger.error("会后报告生成异常！confId=" + conference.getConfId(), e);
+										countFailureTimes(conferenceWaitMake, conference);
+										break;
+									}
+									break;
+							}
+						}else{
+							logger.error("调度取得会议记录出现异常！conferenceId=" + conferenceId);
+							conferenceWaitMake.setIfMake(Consts.TASK_FINISH);
+							conferenceWaitMake.setTaskResult("0");
+							conferenceWaitMake.setMakeTime(new Timestamp(System.currentTimeMillis()));
+							conferenceTaskManager.saveConferenceWaitMake(conferenceWaitMake);
+							continue;
+						}
+					}
+				}
+				logger.info("会议报告生成任务调度结束");
+			}
+		}catch (Exception e){
+			logger.error("会议任务调度后台执行出现异常!", e);
+			e.printStackTrace();
+		}
+	}
+
+	// 限制统计大于10次失败的记录，若有则报错并置标志位
+	public void countFailureTimes(ConferenceWaitMake conferenceWaitMake, ConferenceInfo conference){
+		int times = 0;
+		if(conferenceWaitMake.getTaskResult() != null && !"".equals(conferenceWaitMake.getTaskResult())){
+			try{
+				times = new Integer(conferenceWaitMake.getTaskResult());
+			}catch (Exception e){
+				// 若转换失败将times 将被置为1 ，下次进来的时候转换就不会失败，程序就能正常进行了。
+				logger.warn("countFailureTimes Methord error , Number formate exception , conferenceId = " + conference.getConfId(), e);
+			}
+			times = times + 1;
+			// 执行10次后 置为 已处理 不在执行
+			if(times >= Consts.TASK_ERROR_TIMES){
+				// 当执行十次后，如果还走到这里，将录音文件完成标记为不再处理
+				conferenceWaitMake.setIfMake(Consts.TASK_ERROR_TEN);// test
+				try{
+					logger.error("countFailureTimes Methord find the conference task error , more than 10 times!  conferenceId = " + conference.getConfId() + "未找到录音文件"
+							+ "请运维同事协助查询，billingcode=" + conference.getConfBillingcode());
+				}catch (Exception e){
+					logger.error("countFailureTimes Methord find the conference task error , more than 10 times!  conferenceId = " + conference.getConfId());
+				}
+			}
+		}
+		conferenceWaitMake.setTaskResult((times) + "");
+		conferenceWaitMake.setMakeTime(new Timestamp(System.currentTimeMillis()));
+		conferenceTaskManager.update(conferenceWaitMake);
+	}
+}

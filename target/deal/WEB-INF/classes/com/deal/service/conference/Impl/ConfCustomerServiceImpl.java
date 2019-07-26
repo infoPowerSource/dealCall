@@ -1,0 +1,127 @@
+package com.deal.service.conference.Impl;
+
+import java.util.List;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import com.deal.dao.create.ConferenceDao;
+import com.deal.dao.create.CustomerDao;
+import com.deal.dao.create.PartyDao;
+import com.deal.entity.create.CustomerInfo;
+import com.deal.entity.party.PartyInfo;
+import com.deal.service.conference.IConfCustomerService;
+import com.deal.util.DateFormatUtil;
+
+/**
+ * 会议参会人操作类
+ * 
+ * @author zhipeng.xu
+ * @date 2017.05.23
+ *
+ */
+@Service
+public class ConfCustomerServiceImpl implements IConfCustomerService{
+	public static final Logger logger = LoggerFactory.getLogger(ConfCustomerServiceImpl.class);
+
+	@Autowired
+	private CustomerDao custDao;
+	@Autowired
+	private ConferenceDao confDao;
+
+	@Autowired
+	private PartyDao partyDao;
+
+	public List<CustomerInfo> getPartyInfo(String confId){
+		return custDao.getCustListForMonit(confId);
+	}
+
+	/**
+	 * 从acm消息中获取 掉线的专家信息 保存入库
+	 * 
+	 * @return
+	 */
+//	public boolean savePartyStatus(PartyInfo partyInfo){
+//		logger.info("专家状态为 ：" + partyInfo.getPartyStatus());
+//		// 判断 如果专家状态为 0或1 则为离线状态，其余都是 在线状态
+//		if(partyInfo.getPartyStatus() == 0 || partyInfo.getPartyStatus() == 1) {
+//			partyInfo.setPartyStatus(0);
+//		}else{
+//			partyInfo.setPartyStatus(1);
+//		}
+//		// 根据partyId 查询数据库中 是否存在该专家
+//		try{
+//			PartyInfo party = partyDao.getPartyById(partyInfo);
+//			if(party != null) {
+//				//如果当前party的状态和数据库中的状态相同，则不更新
+//				if(party.getPartyStatus() ==partyInfo.getPartyStatus()){
+//					return false;
+//				}
+//				// 数据库中存在该专家
+//				// 更新专家信息 更新专家信息时，ismake要更新成未生成任务 因为有可能一些专家 已经生成任务后，再次入会，又掉线的情况
+//				// 1、如果掉线任务已经生成，isMake变1，但是此时 专家 又掉线，需要重新记录秒数
+//				// 2、专家掉线不到20s后 重新入会，则秒数 也需要重新记录
+////				party.setPartyStatus(partyInfo.getPartyStatus());
+//				party.setPartyName(partyInfo.getPartyName());
+//				party.setPartyPhone(partyInfo.getPartyPhone());
+//				party.setIsMake(0);
+//				party.setPartyTime(0);
+//				party.setUpdateTime(DateFormatUtil.getTimeAsDate());
+//				partyDao.updateParty(party);
+//			}else{
+//				// 执行插入
+//				partyInfo.setCreateTime(DateFormatUtil.getTimeAsDate());
+//				partyInfo.setUpdateTime(DateFormatUtil.getTimeAsDate());
+//				partyDao.save(partyInfo);
+//			}
+//		}catch (Exception e){
+//			e.printStackTrace();
+//			return false;
+//		}
+//		return true;
+//	}
+
+	/**
+	 * 根据电话查询 参会人信息
+	 */
+	public boolean addParty(CustomerInfo custInto){
+		boolean result = true;
+		List<CustomerInfo> listCustomer = custDao.getPartyByPhoneAndName(custInto.getCustTel(),custInto.getConfInfo().getConfId());
+		if((listCustomer == null || listCustomer.size() == 0) 
+				&& custInto.getCustTel() != null 
+				&& !"".equals(custInto.getCustTel())) {
+			// 将此参会人保存进通讯录
+			custDao.save(custInto);
+		}else{
+			result = false;
+		}
+		return result;
+	}
+
+	/**
+	 * 根据姓名和电话查询 参会人信息
+	 */
+	public boolean checkParty(CustomerInfo custInto){
+		boolean result = true;
+		List<CustomerInfo> listCustomer = custDao.getPartyByName(custInto.getCustName(),custInto.getConfInfo().getConfId());
+		if(listCustomer == null || listCustomer.size() == 0) {
+			result = true;
+		}else{
+			result = false;
+		}
+		return result;
+	}
+
+	@Override
+	public List<CustomerInfo> getCustList(String phone, int type, Long confId){
+		return custDao.getHost(phone, type, confId);
+	}
+
+	@Override
+	public List<Object> getConfCustList(String name, String phone, String email,String userBc){
+//		return custDao.getConfCustList(name,phone,email);
+		return confDao.getConfCustList(name,phone,email,userBc);
+	}
+}

@@ -1,0 +1,61 @@
+body {
+	overflow-x: auto;
+}
+body, #app {
+	background-color: #fff;
+	color: rgb(74, 74, 74);
+}
+.report-info {
+	padding: 10px 0 10px 14px;
+}
+.report-info .info-item {
+	font-size: 14px;
+	line-height: 20px;
+}
+.report-members table {
+	width: 100%;
+}
+.report-members .head {
+	background-color: rgb(192, 213, 237);
+}
+.report-members .member-item span:first-child {
+	padding-left: 16px;
+}
+.report-members .member-item {
+	width: 667px;
+	height: 40px;
+	line-height: 40px;
+	overflow: hidden;
+}
+.report-members .member-item span {
+	float: left;
+	overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.report-members .content:nth-child(2n + 1) {
+	background-color: rgb(242, 243, 245);
+}
+.report-members .role {
+	width: 112px;
+}
+.report-members .name {
+	width: 180px;
+	padding-right: 30px;
+}
+.report-members .phone {
+	width: 130px;
+	padding-right: 30px;
+}
+.report-members .enterTime {
+	width: 85px;
+	padding-right: 30px;
+}
+.report-members .exitTime {
+	width: 84px;
+	padding-right: 30px;
+}
+.report-members .duration {
+	width: 76px;
+	padding-right: 22px;
+}

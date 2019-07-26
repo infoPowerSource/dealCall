@@ -1,0 +1,728 @@
+var confType;
+var confId;
+var custId="";
+var custName="";
+var personal =0;
+var clickTime="";
+var calltype=0;
+var billingcode="";
+var concelStatus =true;
+
+$(document).ready(function () {
+	$(".warning-hint-none").hide();
+	// 创建倒计时top—tip
+	 setTimeout(createTopTip,60000);
+	
+	//初始时，默认将下拉列表第一行选中，外呼顾问类型
+	$("#task-hour").prop({
+        value: $('#select-hour li:first').text(),
+        name: $('#select-hour li:first').data('time'),
+    });
+	//选择外呼客户
+	$("#task-uses").prop({
+        value: $('#select-users li:first').text(),
+        name: $('#select-users li:first').data('time'),
+    });
+	//初始时，将送回会中隐藏
+	document.getElementById("callBackUser").style.display="none";
+
+	//初始时，将正在呼叫隐藏
+	document.getElementById("calling").style.display = "none";
+	
+	//初始时，将外呼专家状态隐藏
+	document.getElementById("befor_call").style.display = "none";
+	document.getElementById("after_call").style.display = "none";
+	document.getElementById("callingStatus").style.display = "none";
+	document.getElementById("cancelProfessional").style.display = "none";
+	
+	//选择外呼专家的方式，如果是定时外呼，则开始倒计时
+	//$('ul').children('li').bind('click', function(){
+	$('ul').on('click','li',function(){
+		if($(this).html() == "定时外呼"){
+			//选择定时外呼，显示时间设定
+			document.getElementById("befor_call").style.display = "";
+		}else{
+			document.getElementById("befor_call").style.display = "none";
+		}
+	});
+	
+	//外呼其他号码隐藏
+	closeCallOther();
+	
+	//查询会议中参与人列表
+	getConfCustomerlist();	
+	//增加定时查询
+	refreshForm();
+    //查询会议信息
+	getConfInfo();
+	
+	// 创建倒计时top—tip
+	function createTopTip(){
+		  var $topTip = $("<div class='top-tip'>");
+		  var $tipText = $("<div class='tip-text'>");
+		  var $cancelBtn = $("<button>取消(30S)</button>");
+		  		  
+		  var interval = "";
+		  var time = 30;
+		  interval = setInterval(function(){
+			  time--;
+			  $cancelBtn.text("取消("+time+"S)");
+			  if (time == 0){
+				  clearInterval(interval);
+				  topTipTimeout();
+				  $topTip.remove();
+			  }
+		  },1000);
+		  
+		  $cancelBtn.click(function(){ 
+			  clearInterval(interval); 
+			  $topTip.remove(); 
+			  topTipCancel(); 
+		  });
+		
+		  $tipText.append("<span></span>");
+		  $tipText.append("<span>处理超时，任务即将返回到任务池</span>");
+		  $tipText.append($cancelBtn);
+		  $topTip.append($tipText);
+		  $(".table-box").append($topTip);
+	}
+
+	function topTipCancel(){		
+		var $topTip = $("<div class='top-tip'>");
+		//不关闭页面，任务继续处理
+		$.ajax({
+	        type:"GET",
+	        url: BASE_PATH +"/support/task/hold/"+confId+"/"+confType+"/"+supportID,    
+	        dataType:"json",    
+	        global:false,     
+	        success: function(data){              
+	          if(data.success == "true"){
+	      			//取消后，继续计时
+	      			setTimeout(createTopTip,60000);
+	          }
+	        }  
+	    });
+	}
+
+	function topTipTimeout(){
+		if(custId == ""){
+			//关闭页面，并将任务送回任务池
+			$.ajax({    
+		        type:"GET",    
+		        url: BASE_PATH +"/support/task/reNew/"+confId+"/"+confType+"/"+supportID,    
+		        dataType:"json",    
+		        global:false,     
+		        success: function(data){              
+		          if(data.success == "true"){
+		        	  parent.showTaskList();
+		        	  //关闭iframe窗口
+		        	  parent.opStatus=true;
+		        	  var index = parent.layer.getFrameIndex(window.name); //先得到当前iframe层的索引
+		        	  parent.layer.close(index);
+		          }
+		        }  
+		    });
+		}else{
+			//取消后，继续计时
+  			setTimeout(createTopTip,60000);
+		}		
+	}
+	
+	
+    // 确定完成客服任务
+    $(".task-info").on('click', '.check-task', function(event) {
+        event.stopPropagation();
+        if(personal>0){
+    		$(".warning-hint").show();
+    	}else{
+    		$(".warning-hint-none").show();
+    	}
+    });
+    
+    $(".warning-hint").on('click', '.check-item', function(event) {
+        event.stopPropagation();
+        if ($(this).hasClass('yes')) {
+            layer.msg('任务已完成', { time: 1500 });
+            $(".warning-hint").hide();
+            taskClose();
+        } else if ($(this).hasClass('cancle')) {
+            $(".warning-hint").hide();
+        }
+    });
+
+    $(".warning-hint-none").on('click', '.check-item', function(event) {
+        event.stopPropagation();
+        if ($(this).hasClass('yes')) {
+            layer.msg('任务已完成', { time: 1500 });
+            $(".warning-hint-none").hide();
+            taskClose();
+        } else if ($(this).hasClass('cancle')) {
+            $(".warning-hint-none").hide();
+        }
+    });
+
+    //外呼客户到客服走廊
+    $('#callUser').click(function () {
+    	var nowTime = new Date().getTime();
+ 	   	if( clickTime != "" && (nowTime - clickTime < 2000)){
+ 	   		layer.msg('<p class="task-popup">请不要频繁点击</p>', { time: 1500 });
+ 	        return;
+ 	    }else{
+ 	    	clickTime = nowTime;
+ 	    	var ajaxUrl = BASE_PATH +"/support/task/callCustomer/"+confId+"/"+ confType +"/"+$('#task-uses').prop("name");
+ 			$.ajax({
+ 				type:"GET", //请求方式
+ 				url:ajaxUrl,
+ 				dataType:"json",
+ 				contentType : "application/json",
+ 				success:function (data) {
+ 					//$('#callUser').removeAttr("readonly");
+ 					if (data.success == "true") {
+ 				    	custId = $('#task-uses').prop("name");
+ 				    	custName = $('#task-uses').val();
+ 						document.getElementById("callUser").style.display="none";
+ 						document.getElementById("callBackUser").style.display="";
+ 				    }
+ 		        }
+ 		    });
+ 	    }		
+    });    
+
+    //把客户送回到会中
+    $('#callBackUser').click(function () {
+    	var nowTime = new Date().getTime();
+ 	   	if( clickTime != "" && (nowTime - clickTime < 2000)){
+ 	   		layer.msg('<p class="task-popup">请不要频繁点击</p>', { time: 1500 });
+ 	        return;
+ 	    }else{
+ 	    	clickTime = nowTime;
+	    	var ajaxUrl = BASE_PATH +"/support/task/callBackCustomer/"+confId +"/"+custId;
+			$.ajax({
+				type:"GET", //请求方式
+				url:ajaxUrl,
+				dataType:"json",
+				contentType : "application/json",
+				success:function (data) {
+					//console.log("送回外呼成功，data="+data.success);
+					//$('#callBackUser').removeAttr("readonly");
+					if (data.success == "true") {			    	
+						custId = "";
+						custName = "";
+						document.getElementById("callUser").style.display="";
+						document.getElementById("callBackUser").style.display="none";
+				    }
+		        }
+		    });
+ 	    }
+    });
+
+	var interval = "";
+    //外呼顾问
+    $('#callProfessional').click(function () {
+    	concelStatus =true;
+    	calltype = $('#task-hour').prop("name");
+    	calltime = $('#calltype').val();
+    	if(custId == ""){
+	    	if(calltype ==1){
+	    		var regNum = /^([1-9]|10)$/;
+	    		if (calltime == "" || !regNum.test(calltime)) {
+	    			layer.msg('<p class="task-popup">定时外呼设置时间必须为1-10的数字，请重新输入</p>', { time: 1500 });
+	    			return false;
+	    		}
+	    		//定时外呼，将定时时间传递到后台，并显示倒计时
+				var time = 60 * calltime;
+				
+				calltype = calltime;
+	
+				document.getElementById("befor_call").style.display = "none";
+				document.getElementById("after_call").style.display = "";
+				document.getElementById("cancelProfessional").style.display = "";
+				document.getElementById("callProfessional").style.display = "none";	
+				$("#task-hour").attr("disabled","disabled");
+				$("#select-hour li").remove();
+				interval = setInterval(function(){
+					time--;
+					var minute = parseInt(time/60);
+					var secend = time % 60;
+					if(secend <10){
+						secend = "0"+secend;
+					}
+					$('#callRemainTime').val(minute+":"+secend);
+					if (time == 0){
+						//倒计时结束
+						clearInterval(interval);
+						document.getElementById("after_call").style.display = "none";
+						//如果外呼已经被取消，不显示
+						if(concelStatus){
+							document.getElementById("callingStatus").style.display = "";	
+						}				
+					}
+				},1000);
+	    	}
+			var ajaxUrl = BASE_PATH +"/support/task/callProfessional/"+ confId +"/"+ calltype +"/"+ confType+"/"+supportID;
+			$.ajax({
+				type:"GET", //请求方式
+				url:ajaxUrl,
+				dataType:"json",
+				contentType : "application/json",
+				success:function (data) {
+					if (data.success == "true") {
+						if(calltype == 0){
+							layer.msg('<p class="task-popup">立即外呼顾问成功</p>', { time: 1500 });
+						}
+				    }else if (data.success == "none"){
+				    	layer.msg('<p class="task-popup">会议中没有咨询客户</p>', { time: 1500 });
+				    }else {
+				    	layer.msg('<p class="task-popup">外呼顾问失败</p>', { time: 1500 });
+				    }
+		        }
+		    });
+    	}else{
+    		layer.msg('<p class="task-popup">请先将客户送回会中</p>', { time: 1500 });
+    	}
+    });
+    
+
+    //取消外呼顾问
+    $('#cancelProfessional').click(function () {
+    	calltype = $('#calltype').val();
+    	
+    	var ajaxUrl = BASE_PATH +"/support/task/cancelCallProfessional/"+ confId +"/"+ calltype +"/"+ confType+"/"+supportID;
+		$.ajax({
+			type:"GET", //请求方式
+			url:ajaxUrl,
+			dataType:"json",
+			contentType : "application/json",
+			success:function (data) {
+				document.getElementById("befor_call").style.display = "";
+				document.getElementById("after_call").style.display = "none";
+				document.getElementById("callingStatus").style.display = "none";
+				document.getElementById("cancelProfessional").style.display = "none";
+				document.getElementById("callProfessional").style.display = "";	
+				$('#task-hour').removeAttr("disabled");  
+				$("#select-hour").append("<li data-time='0'>立即外呼</li>");
+				$("#select-hour").append("<li data-time='1'>定时外呼</li>");
+				concelStatus =false;
+				clearInterval(interval);
+				$('#callRemainTime').val("");
+	        }
+	    });
+    });
+    
+    //外呼其他号码
+    $('#call-send').click(function() {
+    	//var regArea = /^0\d{2,3}$/;
+    	var regTel = /^\+?[1-9][0-9]*$/;
+		var regCode = /^\+([1-9]|[1-9][0-9]*)$/;
+		var regArea = /^\+?[0-9]*$/;
+
+    	var tel = $('.phone-main').val();
+    	var area = $('.num').val();
+		var country = $("#country").val(); // 国家码
+    	
+    	if ($("#otherName").val()){
+			for (var i=0; i<$("tr.cusList").length; i++){
+				if ($("tr.cusList")[i].childNodes[1].textContent.indexOf($("#otherName").val()) != -1){
+					$("#messagetext").text("新增外呼不能和参会人姓名相同");
+					return false;
+				}
+			}
+		}
+    	
+    	if (!regCode.test(country)) {
+			$("#messagetext").text("国家码不正确，请修正!");
+			$("#country").val("+86");
+			return false;
+		}
+    	
+    	if (tel == "" || tel == "电话号码") {
+    		$("#messagetext").text("请输入电话号码");
+    		$('.phone-main')[0].focus();
+    	} else {
+    		if(country == "+86"){
+    			if (tel.length != 11 && (area == "" || area == "区号")) {
+        			$("#messagetext").text("请输入区号");
+        			return false;
+        		}
+        		if (tel.length == 11) {
+        			if (!is_mobile(tel)) {
+        				$("#messagetext").text("手机号码不正确,请修正!");
+        				$('.phone-main')[0].focus();
+        			} else {
+        				$("#messagetext").text("");
+        				callother();
+        			}
+        		} else {
+        			if (regTel.test(tel)) {
+        				if (!regArea.test(area)) {
+        					$("#messagetext").text("电话区号不正确，请修正!");
+        					return false;
+        				} else {
+        					$("#messagetext").text("");
+        					callother();
+        				}
+        			} else {
+        				$("#messagetext").text("电话号码格式不正确,请修正!");
+        				$('.phone-main')[0].focus();
+        			}
+        		}
+    		} else {
+				if (!regTel.test(tel)) {
+					$("#messagetext").text("电话号码格式不正确,请修正!");
+					return false;
+				}
+				if(area != "" && area != "区号"){
+					if (!regArea.test(area)) {
+						$("#messagetext").text("电话区号不正确，请修正!");
+						return false;
+					} else {
+						$("#messagetext").text("");
+						callother();
+					}
+				} else {
+					$("#messagetext").text("");
+					callother();
+				}
+			}    		
+    		
+    		$(".call-other").show();
+    	}
+    });
+    
+    layui.use('layer', function() {
+    	// 呼叫其它号码
+    	$("body").on('click', '.call-other', function(event) {
+    		$(".call-other").hide();
+    		event.preventDefault();
+    		$('#call-user,.td-call-box').show();
+    		document.getElementById("showCallOther").style.display = "";
+    		getCountryCode(false);
+    	});
+
+    	$("body").on('click', '.td-del-btn', function(event) {
+    		event.preventDefault();
+    		closeCallOther();
+    		$(".call-other").show();
+    	});
+    	
+    	var ifshow = true;
+		//定义下拉列表
+		$(document).on('click', '.drop-list-box', function(event) {
+	        event.preventDefault();
+	        /* Act on the event */
+	        if ($(this).find('.code_list').is(":hidden")) {
+	            $(this).find('.code_list').slideDown(100);
+	        } else {
+	        	if(ifshow){
+	        		$(this).find('.code_list').slideUp(10);
+	        	}            
+	        }
+	        
+	        ifshow = true;
+	    });
+		$(document).on('click', '.drop-list-box', function(event) {
+	        event.preventDefault();
+	        /* Act on the event */
+	        if ($(this).find('.task-time').is(":hidden")) {
+	        	$(this).find('.task-time').slideDown(100);
+	        } else {
+	            $(this).find('.task-time').slideUp(10);
+	        }
+	    });
+		$(document).on('click', function(event) {
+	        if (!$(event.target).is('li') && !$(event.target).is('.select-menu')) {
+	            $("table.iframe tbody").css('overflow-y', 'auto');
+	            $('.code_list').slideUp(10);
+	        }
+	    });
+		// 自定义的下拉菜单点击事件
+	    $(document).on('click', '.code_list li', function(event) {
+	        event.preventDefault();
+	        var timeText = $(this).text();
+	        var timedata = $(this).data('time');
+	        var target = $(this).closest('.code_list').siblings('.select-menu')
+	        if(timeText == "查看更多国家"){
+	        	getCountryCode(true);
+	        	ifshow=false;
+	        	$(target).prop({
+	                value: "+86"
+	            });
+	        }else{
+	        	$(target).prop({
+	                value: "+"+ timedata
+	            });
+	        }
+	        if(ifshow){
+	        	$(this).closest('.code_list').slideUp(10);
+	        }
+	    });
+    });
+});
+
+function convertStatus(status){
+	var cuStatus="";
+	//参与人状态，0：已入会，1：离线,2：呼叫中
+	if(status =="0"){
+		cuStatus = "已入会";
+	}else if(status =="2"){
+		cuStatus = "呼叫中";
+	}else if(status =="3"){
+		cuStatus = "未呼通";
+	}else {
+		cuStatus = "离线";
+	}
+	return cuStatus;
+}
+
+function convertType(type){
+	var cusType="";
+	//参与人类型，1:咨询客户 0：顾问
+	if(type =="1"){
+		cusType = "客户";
+	}else if(type ==0){
+		cusType = "顾问";
+	}
+	return cusType;
+}
+
+function getConfCustomerlist(){
+    //获取会议中参与人列表
+    $.ajax({    
+        type:"GET",    
+        url: BASE_PATH +"/support/customer/list/"+confId,    
+        dataType:"json",    
+        global:false,     
+        success: function(data){
+        	$("#taskList .cusList").remove();
+        	//$("#taskList tr:not(#title,#showCallOther,#CallOtherBotton)").remove();
+        	$("#select-users li").remove();
+        	personal =0;
+	      	  if(custId != ""){
+	      		  $("#select-users").append("<li data-time='"+custId+"'>"+custName+"</li>");
+	      	  }
+	          $.each(data,function(index,item){
+	        	  //当将咨询客户外呼到走廊后，该客户列表中要显示在线
+        		  var cuStatus = convertStatus(item.custStatus);
+	        	  if(custId != "" && custId == item.custId){
+	        		  cuStatus = "已入会";
+	        	  }
+	              $("#taskList").prepend(
+	                     "<tr class='cusList'>"
+			              +"<td width='15%'>" + convertType(item.custType) + "</td>"
+			              +"<td width='15%'>" + item.custName + "</td>"
+			              +"<td width='30%'>" + item.custTel + "</td>"
+			              +"<td width='20%'><span>" + item.custSpeakStatus + "</span></td>"
+			              +"<td width='15%'><span class='online'>" + cuStatus + "</span></td>"
+			              +"</tr>");
+	              //添加在会议中的客户到外呼列表
+	              //判断是否在会议中
+	              if(item.custStatus==0 && item.custType==1){
+	            	  $("#select-users").append("<li data-time='"+item.custId+"'>"+item.custName+"</li>");
+	              }
+	              //判断顾问没入会人数，有没入会则设置1
+	              if(item.custStatus !=0 && item.custType==0){
+	            	  personal = 1;
+	              }
+	          });	          
+	      	//将外呼客户第一个作为默认值显示在列表中
+	      	$("#task-uses").prop({
+	              value: $('#select-users li:first').text(),
+	              name: $('#select-users li:first').data('time'),
+	        });
+	      	//如果专家已经入会，隐藏外呼中的提示
+	      	if(personal==0){
+	      		document.getElementById("callingStatus").style.display = "none";
+	      	}
+        }  
+    });  
+}
+
+
+function getConfInfo(){
+
+    //获取会议信息
+    $.ajax({    
+        type:"GET",    
+        url: BASE_PATH +"/support/conference/info/"+confId,    
+        dataType:"json",    
+        global:false,     
+        success: function(data){
+        	if (data.success == "true") {
+        		$("#feedbackName").text(data.name);
+          	  	$("#feedbackPhone").text(data.tel);
+          	  	billingcode=data.billingcode;
+		    }	          
+        }  
+    });  
+}
+
+//定时5秒刷新列表
+function refreshForm(){
+	getConfCustomerlist();
+	getTaskList();
+	setTimeout(refreshForm, 5000);
+}
+
+function getTaskList(){
+	//查询紧急任务列表
+	$.ajax({    
+        type:"GET",    
+        url: BASE_PATH +"/support/getNotDealTask",    
+        dataType:"json",    
+        global:false,     
+        success: function(data){
+          if(data.success == "true"){
+        	  if(data.taskNum >0){
+        		  $("#taskNum").text(data.taskNum);
+        		  document.getElementById("improtantMessage").style.display="";
+        	  }else{
+        		  document.getElementById("improtantMessage").style.display="none";
+        	  }        	  
+          }
+        }  
+    }); 	
+}
+
+//将咨询客户送回会中
+function callBackCustomer(){
+	var ajaxUrl = BASE_PATH +"/support/task/callBackCustomer/"+confId +"/"+custId;
+	$.ajax({
+		type:"GET", //请求方式
+		url:ajaxUrl,
+		dataType:"json",
+		contentType : "application/json",
+		success:function (data) {
+			if (data.success == "true") {
+				custId = "";
+				custName = "";
+				document.getElementById("callUser").style.display="";
+				document.getElementById("callBackUser").style.display="none";
+		    }
+        }
+    });
+}
+
+function taskClose(){
+	if(custId != ""){
+		//如果咨询客户在在走廊，先送回会中
+		callBackCustomer();
+	}
+
+	//关闭任务
+	$.ajax({    
+        type:"GET",    
+        url: BASE_PATH +"/support/task/close/"+confId+"/"+confType+"/"+supportID+"/"+calltype,
+        dataType:"json",    
+        global:false,     
+        success: function(data){              
+          if(data.success == "true"){
+        	  //刷新任务池
+        	  parent.showTaskList();
+        	  //任务关闭成功
+        	  var index = parent.layer.getFrameIndex(window.name); //先得到当前iframe层的索引
+        	  //客服状态返回未处理
+        	  parent.opStatus=true;
+      	  	  parent.layer.close(index); //再执行关闭
+          }else {
+        	  //任务领取出现异常
+        	  layer.msg('<p class="task-popup">任务关闭失败</p>', { time: 1500 });
+          }
+        }  
+    }); 	
+}
+
+
+// 外呼其他号码
+function callother() {
+	document.getElementById("call-send").style.display = "none";
+	document.getElementById("calling").style.display = "";
+	$("#messagetext").text("");
+	var role = $('#task-user').prop("name");
+	var phone = $("#otherPhone").val(); // 外呼号码
+	var country = $("#country").val(); // 国家码
+	var area = $("#area").val(); // 区号
+	var name = $("#otherName").val(); // 姓名
+	if (name == "" || name == "姓名") {
+		//如果姓名为空，保存显示为电话号码
+		name = phone;
+	}
+	if (area == "" || area == "区号") {
+		area = " ";
+	}
+	var url = BASE_PATH + "/support/calloutOther/";
+	$.ajax({
+		type : "POST",
+		// 提交的数据
+		data : {
+			phone : phone,
+			name : name,
+			role : role,
+			billingCode : billingcode,
+			area : area,
+			country : country,
+			confId : confId
+		},
+		url : url,
+		cache : false,
+		success : function(data) {
+			if (data == 0) {
+				closeCallOther();
+			}
+			if (data == 2) {
+				closeCallOther();
+				refreshForm();
+			}
+			if (data == 1) {
+				$("#messagetext").text("外呼失败，请联系管理员");
+				document.getElementById("call-send").style.display = "";
+				document.getElementById("calling").style.display = "none";
+			}
+			if (data == 3) {
+				$("#messagetext").text("电话号码重复");
+				document.getElementById("call-send").style.display = "";
+				document.getElementById("calling").style.display = "none";
+			}
+		}
+	});
+}
+
+function closeCallOther(){
+	document.getElementById("call-send").style.display = "";
+	document.getElementById("calling").style.display = "none";
+	//添加的电话号码清空
+	$("#task-user").prop({
+        value: "咨询客户",
+        name: 1,
+	});
+	$("#otherName").val("");
+	$("#area").val("");
+	$("#otherPhone").val("");
+	$("#messagetext").text("");
+	$('#call-user,.td-call-box').hide();
+	document.getElementById("showCallOther").style.display = "none";
+}
+
+//初始化国家码，type=true表明把数据库中所有国家列出，否则只显示5个常用国家
+function getCountryCode(type){
+	$.ajax({
+        type: 'GET',
+        url: BASE_PATH + "/support/countrycode",
+        success: function (data) {
+        	$("#custInfo li").remove();
+        	$("#country").val("+86");
+        	if(type==true){
+        		$.each(data,function(index,item){
+            		$("#custInfo").append("<li data-time='"+item.code+"'>"+item.country+"</li>");
+            	});
+        	}else{
+        		$.each(data,function(index,item){
+        			if(index<6){
+        				$("#custInfo").append("<li data-time='"+item.code+"'>"+item.country+"</li>");
+        			}        			
+        		});
+        		//最后添加一条链接
+        		$("#custInfo").append("<li data-time='0'>查看更多国家</li>");
+        	}        	
+        }
+    });
+}

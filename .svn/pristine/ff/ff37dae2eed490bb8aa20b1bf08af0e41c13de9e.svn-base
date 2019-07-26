@@ -1,0 +1,18 @@
+package com.deal.dao.mss;
+
+import com.deal.dao.common.BaseDao;
+import com.deal.entity.mss.MSSSendRecord;
+import org.springframework.stereotype.Repository;
+
+/**
+ * @version V0.1
+ * @Description: 邮件发送记录
+ * @author: yanqing.zhang
+ * @date: 2017/12/4 15:54
+ */
+@Repository
+public class MailSendRecordDao extends BaseDao{
+    public void save(MSSSendRecord recode) {
+        getSession().saveOrUpdate(recode);
+    }
+}

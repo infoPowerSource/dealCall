@@ -1,0 +1,66 @@
+@CHARSET "UTF-8";
+.task-pwd-record-wrap {
+	overflow: hidden;
+	line-height: 28px;
+}
+.record-staus-wrap {
+	float: right;
+	color: #4a4a4a;
+	line-height: 24px;
+}
+
+.record-staus-wrap .record-status-item {
+	display: none;
+}
+
+.record-staus-wrap .record-status-item * {
+	vertical-align: middle;
+}
+.record-staus-wrap .record-status-item .record-btn {
+	display: inline-block;
+	width: 50px;
+	height: 28px;
+	text-align: center;
+	line-height: 28px;
+	border-radius: 2px;
+  	background-color: #ffffff;
+  	border: solid 1px #caced3;
+  	cursor: pointer;
+}
+.record-staus-wrap .pause-icon {
+	display: inline-block;
+	width: 4px;
+	height: 14px;
+	background-color: #f18181;
+}
+.record-staus-wrap .recording-icon {
+	display: inline-block;
+	width: 14px;
+	height: 14px;
+	border-radius: 7px;
+	background-color: #f18181;
+}
+
+
+.drop-list-box.countrycode {
+	width: 50px;
+}
+.drop-list-box.countrycode .select-menu:focus {
+	background-position: 70px;
+}
+.drop-list-box.countrycode .code_list {
+    display: none;
+    border: 1px solid #caced3;
+    z-index: 5;
+    padding: 5px 5px 5px 10px;
+    font-size: inherit;
+    border-radius: 2px;
+    background-color: #fff;
+    width: 270% !important;
+    left: 0 !important;
+    position: absolute;
+    top: 30px;
+    height: 110px !important;
+    overflow-y: auto !important;
+	cursor: pointer;
+}

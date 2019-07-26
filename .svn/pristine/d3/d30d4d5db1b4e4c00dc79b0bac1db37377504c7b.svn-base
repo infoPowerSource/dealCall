@@ -1,0 +1,201 @@
+var Stch = false;
+var phone,name,role,billingCode,confId;
+var confStatus ;
+$(function() {
+	var callingStatus = {
+			0:{en:"z-zaixian",zh:"在线"},
+			1:{en:"z-lixian",zh:"离线"},
+			2:{en:"z-hujiao",zh:"呼叫中"},
+	}
+	
+	window.getConfUsers = function() {
+		var nameLength = 0;
+		$.ajax({
+			type : 'GET',
+			url : BASE_PATH + "/conf/confRefresh",
+			data: {
+				confId: $("#confId").val()
+			},
+			success : function(data) {
+				if (!data || !data.partyInfo) {
+					return;
+				}
+				$("#confStatus").val(data.conference.confStatus);
+				changeFuction();
+				$("#custList tr:not(#title)").remove();
+				$.each(data.partyInfo, function(index, party) {
+					if (party.partyName.length > nameLength) {
+						nameLength = party.partyName.length;
+					}
+					
+					$("#custList").append(
+						"<tr class='mui-input-row-2 f-bb-E7E7E7' data-partyPhone='" + party.partyPhone + "' data-partyName='" + party.partyName + "' data-partyRole='" + party.partyRole + "' data-confBillingcode='" + data.conference.confBillingcode + "'>"
+						+"<td><div class='m-txt'>" + (party.partyRole == 0 ? "顾问" : party.partyRole == 1 ? "咨询客户" : '') + "</div></td>"
+						+"<td><div class='m-txt'>" + party.partyName + "</div></td>"
+						+"<td><div class='m-txt'>" + party.partyPhone + "</div></td>"
+						+(data.conference.confStatus != 1 && data.conference.confStatus != 4 ? "<td><div class='m-txt'></div></td>" : "<td><a class='m-txt " + (callingStatus[party.partyStatus].en) +"'"+ (party.partyStatus ==1 ? " ontouchstart='calling(this)' href='#hujiaozhuanjia'" : " ")+">" + (callingStatus[party.partyStatus].zh) + "</a></td>")
+						+"</tr>" 
+					);
+					
+				});
+				var confNameLength = $(".conf-name").text().length;
+				if (nameLength > 5||confNameLength>17) {
+					$(".nameLength").width("170px");
+					$(".conf-detail-ul").css("min-width", "460px");
+				}else{
+					$(".nameLength").width("80px");
+				}
+			},
+			error: function(err) {
+				console.log("getConfUsers error, err: ",  err);
+			}
+		});
+	}
+	// 间隔刷新
+	getChangedData();
+	//根据会议状态显示不同的编辑会议连接
+	changeFuction();
+	
+	var confName = $(".conf-name").text();
+	if (confName.length > 17) {
+		$(".conf-detail-ul").css("min-width", "460px");
+	};
+	
+	$("#callback").click(function () {
+		window.location.href = BASE_PATH + "/app/conf/confInfo";
+	});
+});
+
+//刷新
+function getChangedData() {
+	if (getChangedData.timer) {
+		clearTimeout(getChangedData.timer);
+		getChangedData.timer = null;
+	}
+
+	getConfUsers();
+	getChangedData.timer = setTimeout(getChangedData, 5000);
+}
+
+function timeout() {
+	setTimeout(getChangedData, 5000);
+}
+
+function changeFuction(){
+	confStatus=$("#confStatus").val();
+	if(confStatus==1 || confStatus==4){
+		//当会议状态是正在召开或者正在休息时，可以外呼其他人
+		$("#fuc_other li").remove();
+		$("#fuc_other").append(
+		"<li class='mui-table-view-cell'>"
+		+"<a href='#hujiao' class='z-hujiao' ontouchstart='callOther()'>呼叫其他人</a>"
+		+"</li>");		
+	}else if(confStatus==0){
+		//会议未开始，可以编辑和删除会议
+		$("#fuc_other li").remove();
+		$("#fuc_other").append(
+		"<li class='mui-table-view-cell'>"
+		+"<a href='#edit' class='z-hujiao' ontouchstart='editConf()'>编辑会议</a>"
+		+"</li>"
+		+"<li class='mui-table-view-cell'>"
+		+"<a href='#del' class='z-hujiao' ontouchstart='deleteConf()'>删除会议</a>"
+		+"</li>");
+	}else{
+		//会议已结束，不可编辑，不可外呼
+		$("#fuc_other li").remove();
+	}
+}
+
+function calling(tar){
+	var $userItem = $(tar).closest(".mui-input-row-2");
+	
+	phone = $userItem.attr("data-partyPhone");
+	name = $userItem.attr("data-partyName");
+	role = $userItem.attr("data-partyRole");
+	billingCode = $userItem.attr("data-confBillingcode");
+	$("#customer").text(name);
+}
+
+// 外呼
+function callout() {
+	var confId = $("#confId").val(); // 会议Id
+	if (Stch == true) {
+		layer.msg("外呼正在处理，请稍候", {time : 3000});
+		return;
+	}
+	Stch = true;
+	var url = BASE_PATH + "/app/conf/callout";
+	$.ajax({
+		type : 'POST',
+		dataType : 'json',
+		url : url,
+		// 提交的数据
+		data : {
+			phone : phone,
+			name : name,
+			role : role,
+			billingCode : billingCode,
+			confId : confId
+		},
+		cache : false,
+		success : function(data) {
+			if (data == 0) {
+				Stch = false;
+				getChangedData();
+			}
+			if (data == 2) {
+				layer.msg("正在连接，请稍候", {time : 3000});
+				Stch = false;
+				timeout();
+			}
+			if (data == 1) {
+				layer.msg('外呼失败，请联系管理员', { time: 3000 });
+				Stch = false;
+				getChangedData();
+			}
+		},
+		error : function(error) {
+			layer.msg('外呼失败，请联系管理员', { time: 3000 });
+			Stch = false;
+			getChangedData();
+		}
+	});
+}
+
+function editConf() {
+	var confId = $("#confId").val();
+	window.location.href = BASE_PATH + "/app/create/createConference?confId="+confId;
+}
+
+function deleteConf() {
+	var confId = $("#confId").val(); // 会议Id
+	var url = BASE_PATH +"/app/create/deleteConference/" + confId;
+	layer.confirm('确定要取消这场会议吗？', {
+		  btn: ['取消会议', '暂不取消'] //按钮
+		}, function(){
+			layer.closeAll('dialog');
+			$.ajax({
+				type : 'GET',
+				url : url,
+				success : function(data) {
+					if (data.success=='true') {
+						layer.msg("取消会议成功", {time:1000, shade: 0.3});
+						setTimeout(function() {
+							window.location.href = BASE_PATH + "/app/conf/confInfo";
+						}, 1000);
+					}
+					if (data.success == 'false') {
+						layer.msg('取消会议失败',{time:3000,shade:0.3});
+					}
+				}
+			});
+		}, function(){
+			layer.closeAll('dialog');
+		});
+}
+
+function callOther() {
+	var confId = $("#confId").val(); // 会议Id
+	var billingcode = $("#confCode").val();
+	window.location.href = BASE_PATH + "/app/conf/callOtherPage/" + confId + "/" + billingcode;
+}

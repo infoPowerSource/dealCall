@@ -1,0 +1,27 @@
+package com.deal.dao.support;
+
+import java.sql.Timestamp;
+import java.util.List;
+
+import org.hibernate.Query;
+import org.springframework.stereotype.Component;
+
+import com.deal.dao.common.BaseDao;
+import com.deal.entity.support.GalleryConfInfo;
+
+@Component
+public class GalleryConfDao extends BaseDao{
+
+	public void save(GalleryConfInfo galInfo){
+		this.getSession().save(galInfo);
+	}
+
+	public List<Object> getDataByBcAndPhone(String bc, String phone,Timestamp endTime){
+		String hql = "from GalleryConfInfo where confBc=:confBc and custPhone=:custPhone and confEndTime>=:confEndTime";
+		Query query = this.getSession().createQuery(hql);
+		query.setParameter("confBc", bc);
+		query.setParameter("custPhone", phone);
+		query.setParameter("confEndTime", endTime);
+		return (List<Object>)query.list();
+	}
+}

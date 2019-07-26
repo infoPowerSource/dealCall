@@ -1,0 +1,55 @@
+package com.deal.service.task;
+
+import java.sql.Timestamp;
+import java.util.List;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import com.deal.dao.sms.SMSSendTaskDao;
+import com.deal.entity.sms.SMSSendTask;
+import com.deal.monitor.cache.RedisService;
+import com.deal.service.sms.ISMSService;
+import com.deal.util.Consts;
+import com.deal.util.DateFormatUtil;
+import com.google.common.collect.Lists;
+
+@Component("smsSendTaskJob")
+public class SMSSendTaskJob{
+
+	private static Logger logger = LoggerFactory.getLogger(SMSSendTaskJob.class);
+
+	@Autowired
+	private SMSSendTaskDao taskDao;
+	@Autowired
+	private ISMSService smsService;
+
+	public synchronized void execute(){
+		String key = DateFormatUtil.getTimeAsDate() + "smsSendTaskJob";
+		logger.info("开始执行发送短信任务-------");
+		if(!RedisService.IsExistOper(key, "smsSendTaskJob")){
+			RedisService.putOperToCache(key, "smsSendTaskJob");
+			List<SMSSendTask> falseList = Lists.newArrayList();
+			List<SMSSendTask> taskList = taskDao.getTaskListByDate();
+			logger.info("查询出发送任务表中数据条数" + taskList.size());
+			for(SMSSendTask sendTask : taskList){
+				sendTask.setIsHandle(Consts.SMS_HANDLE_RESULT_PROCESSED);
+				sendTask.setFinishTime(new Timestamp(System.currentTimeMillis()));
+				if(smsService.sendSMS(sendTask) == 1){
+					logger.info("发送短信成功，短信ID:" + sendTask.getSmsId() + "号码:" + sendTask.getReceive());
+				}else{
+					falseList.add(sendTask);
+				}
+			}
+			logger.info("本次任务发送短信失败条数" + falseList.size());
+			if(falseList.size() > 0){
+				for(SMSSendTask sendTask : falseList){
+					logger.error("发送失败短信ID:" + sendTask.getSmsId() + "号码:" + sendTask.getReceive());
+				}
+			}
+			logger.info("结束执行发送短信任务-------");
+		}
+	}
+}

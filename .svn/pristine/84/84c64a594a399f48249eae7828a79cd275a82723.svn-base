@@ -1,0 +1,401 @@
+	
+var search = location.search;
+
+if (search.indexOf("confId") !== -1) {
+	search = search.split("=");
+}
+var confId = search[1];
+var buttonStatus=false;
+var vm =new Vue({
+	el:'#creteConf',
+	data:{
+		form:{
+			buttonName:"安排会议",
+			custNameDuplicate:false,
+            custMobileDuplicate:false,
+			//安排会议
+			anpai:{
+				zj:[],
+				kh:[],
+				cfg:{
+					//会议主题
+					zt:"",
+					//开始时间
+					sj:"",
+					//时长
+					sc:"",
+					hj:"到达会议预约时间，自动外呼专家",
+					hjKey: "1",
+					hjConfig: {
+						"1": '到达会议预约时间，自动外呼顾问',
+						"2": '有咨询客户入会后，自动外呼顾问',
+						"3": '所有咨询客户入会后，自动外呼顾问',
+						"4": '与咨询客户确认后，由客服外呼顾问'
+					},
+					//会议录音
+					ly:false
+				}
+			}
+		}
+	},
+	mounted:function(){
+		_this=this;
+		if (!confId) {
+			_this.form.anpai.zj.push(Y.zj());
+			_this.form.anpai.kh.push(Y.zj());
+		}
+	},
+	methods:
+		{inpclick:function(key,data,index){
+			var _self=this;
+			
+			if(typeof key.dataset==="undefined"){
+				if(typeof key==="number"){
+					var obj=_self.$refs[index][key].dataset;
+				}else{
+					var obj=_self.$refs[index].dataset;
+				}
+			}else{
+				var obj=key.dataset;
+			}
+			var objId=obj.id,
+			    objKey=obj.k;
+		        
+			switch(objId){
+			 case "addZj":
+				  data.push(Y.zj(key+1));
+				  var wTop=$(window).scrollTop();
+				  break;
+			 case "addKh":
+				  var wTop=$(window).scrollTop();
+				  data.push(Y.kh(key+1));
+				  $("html,body").stop().animate({"scrollTop": (wTop+170) + "px"},500);
+				  break;
+			 case "delZj":
+				 data.splice(objKey,1);
+				 break;
+			 case "delKh":
+				 data.splice(objKey,1);
+				 break;
+				case "addConf":
+				 if(buttonStatus){
+					 return;
+				 }
+				 //编辑会议时,召开中的会议不能更新
+                 if(confId){
+				 	var isConfBegining = false;
+                 	//查询会议信息
+                     $.ajax({
+                         type: "GET",
+                         url: BASE_PATH + "/app/conf/" + confId,
+						 async: false,
+                         success: function (conf) {
+                             if (conf.confStatus == 1) {
+                                 isConfBegining = true;
+                             }
+                         }
+                     });
+                     if(isConfBegining){
+                         layer.msg('会议激活无法更新会议', {time: 2E3, shade: 0.3});
+                         window.location.replace(BASE_PATH + "/conf/confDetail/" + confId);
+                         return;
+					 }
+				 }
+				 if(data.cfg.sc=="00:00"){
+					 layer.msg('请输入会议时长',{time:2E3,shade:0.3});
+					 return;
+				 }
+				 var selectDate=data.cfg.sj;
+				 var dates = selectDate.split(" ");
+				 var dateArr=dates[0].split("-");
+				 var timeArr=dates[1].split(":");
+				 var selData = new Date(dateArr[0],dateArr[1]-1,dateArr[2], timeArr[0],timeArr[1]-1);
+				 if(myDate > selData){
+					 layer.msg('会议召开时间不能早于当前时间',{time:2E3,shade:0.3});
+					 return;
+				 }
+				 if(data.cfg.zt==""){
+					 layer.msg('请输入会议主题',{time:2E3,shade:0.3});
+			    	 return;
+				 }
+				 for(var i=0;i<data.zj.length;i++){
+				     if(data.zj[i].dat.nam==""){
+				    	 layer.msg('请输入姓名',{time:2E3,shade:0.3});
+				    	 return;
+				      }
+				     if(data.zj[i].dat.pho==""){
+				    	 layer.msg('请输入手机号码',{time:2E3,shade:0.3});
+				    	 return;
+				     }else{
+				    	 if(Vbus.rMob(data.zj[i].dat.pho)==false){
+				    		 layer.msg('请输入正确的手机号',{time:2E3,shade:0.3});
+						      return; 
+				    	 }
+				     }
+				     if(data.zj[i].dat.ema!=""){
+				    	 if(Vbus.rema(data.zj[i].dat.ema)==false){
+				    		 layer.msg('请输入正确的邮箱',{time:2E3,shade:0.3});
+								return; 
+				    	 }
+				     }
+				   }
+				 for(var i=0;i<data.kh.length;i++){
+				     if(data.kh[i].dat.nam==""){
+				    	 layer.msg('请输入姓名',{time:2E3,shade:0.3});
+				    	 return;
+				      }
+				     if(data.kh[i].dat.pho==""){
+				    	 layer.msg('请输入手机号码',{time:2E3,shade:0.3});
+				    	 return;
+				     }else{
+				    	 if(Vbus.rMob(data.kh[i].dat.pho)==false){
+				    		 layer.msg('请输入正确的手机号',{time:2E3,shade:0.3});
+						      return;
+				    	 }
+				     }
+				     if(data.kh[i].dat.ema!=""){
+				    	 if(Vbus.rema(data.kh[i].dat.ema)==false){
+				    		 layer.msg('请输入正确的邮箱',{time:2E3,shade:0.3});
+								return; 
+				    	 }
+				     }
+				   }
+				if(this.form.custNameDuplicate){
+					layer.msg('顾问或客户姓名重复',{time:2E3,shade:0.3});
+					return false;
+				}
+				if(this.form.custMobileDuplicate){
+					layer.msg('顾问或客户手机号重复',{time:2E3,shade:0.3});
+					return false;
+				}
+				 buttonStatus=true;
+				 var url = BASE_PATH + '/app/create/addConference';
+				 var confid="";
+				    if(confId){
+				    	confid=confId;
+				    }
+					$.ajax({
+				 		type:"post",
+						url:url,
+						dataType:"json",
+			            data:{data:JSON.stringify(data),
+			            	 confId:confid},
+			            success:function(data){
+			            	if(confid==""){
+			            		layer.msg('会议安排成功',{time:2E3,shade:0.3});
+			            	}else{
+			            		layer.msg('会议更新成功',{time:2E3,shade:0.3});
+			            	}
+			            	setTimeout(function(){window.location.href = BASE_PATH + "/app/conf/confInfo";},2000);
+			            },error:function(jqXHR){
+			            	if(confid==""){
+			            	  layer.msg('开通会议失败',{time:2E3,shade:0.3});
+			            	}else{
+			            		layer.msg('更新会议失败',{time:2E3,shade:0.3});
+			            	}
+			            }
+			        });
+					break;
+			 default:
+					break;
+			}
+	},inpchange:function(obj,data,datas,key){
+		var self=this,
+			Dd=obj.dataset,
+			Dv=obj.value,
+			Did=Dd.id;
+		switch (Did){
+			//邮箱
+			case "ema":
+				if(Vbus.checkEquanl(datas,obj.name,key,data,Did)==false){
+					layer.msg('该邮箱地址已经存在',{time:2E3,shade:0.3});
+				}
+				if(Vbus.rema(data)==false){
+					layer.msg('请输入正确的邮箱',{time:2E3,shade:0.3});
+					return;
+				}
+				break;
+			//电话
+			case "pho":
+				if(Vbus.checkEquanl(datas,obj.name,key,data,Did)==false){
+                    this.form.custMobileDuplicate = true;
+					layer.msg('该手机号码已经存在',{time:2E3,shade:0.3});
+					return false;
+				} else {
+                    this.form.custMobileDuplicate = false;
+                }
+				if(Vbus.rMob(data)==false){
+					layer.msg('请输入正确的手机号码',{time:2E3,shade:0.3});
+					return;
+				}
+				break;	
+			case "nam":
+				if(Vbus.checkEquanl(datas,obj.name,key,data,Did)==false){
+					this.form.custNameDuplicate = true;
+					layer.msg('该姓名已经存在',{time:2E3,shade:0.3});
+				}else {
+                    this.form.custNameDuplicate = false;
+				}
+				break;	
+			default:
+				break;
+		}	
+	},modify:function(confId){
+		var url = BASE_PATH + '/app/create/modifyConference/';
+		$.ajax({
+			type : 'post',
+			url : url,
+			data:{confId:confId},
+			success : function(data) {
+				if(data!="{}"){
+				  var obj=JSON.parse(data);
+				  vm.form.anpai.cfg.zt=obj.date.confName;
+				  vm.form.anpai.cfg.sj=obj.beginTime;
+				  vm.form.anpai.cfg.sc=obj.confduration;
+				  vm.form.anpai.cfg.hj=obj.date.confConfig;
+				  vm.form.anpai.cfg.hjKey=obj.date.confConfig;
+				  if(obj.date.tapedMark==2){
+				    vm.form.anpai.cfg.ly=true;
+				    mui("#recordBtn").switch().toggle();
+				  }else{
+					vm.form.anpai.cfg.ly=false;
+				  }
+				  var custObj=obj.date.custRelation;
+				  
+				  for(var i=0;i<custObj.length;i++){
+					  if(custObj[i].custType==0){
+						  var zj = {
+								num: vm.form.anpai.zj.length,
+								dat:{
+									nam: custObj[i].custName,
+									pho: custObj[i].custTel,
+									ema: custObj[i].custEmail 
+								}
+							};
+						  vm.form.anpai.zj.push(zj);
+					  }else{
+						  var kh = {
+								num: vm.form.anpai.kh.length,
+								dat:{
+									nam: custObj[i].custName,
+									pho: custObj[i].custTel,
+									ema: custObj[i].custEmail 
+								}
+							}
+						  vm.form.anpai.kh.push(kh);
+					  }
+				  }
+				}else{
+					layer.msg('查询出错，数据为空',{time:2E3,shade:0.3});
+				}
+			}
+		});
+	}}
+});
+
+
+if(nmin<30){
+	vm.form.anpai.cfg.sj=nYear+'-'+nMoth+'-'+nDate+' '+nhou+':30';
+}else{
+	vm.form.anpai.cfg.sj=nYear+'-'+nMoth+'-'+nDate+' '+(nhou + 1)+':00';
+}
+vm.form.anpai.cfg.sc='01:00';
+vm.form.anpai.cfg.ly=false;
+if (confId) {
+	// 编辑会议
+	vm.modify(confId);
+	vm.form.buttonName="更新会议信息";
+	$("#header").find(".mui-title").text("编辑会议");
+	// 发请求，从server取confId的信息
+	
+	// 回填到 vm的data里边
+	
+	// 点编辑的按钮，提交数据到 /create/modifyConference/{confId}
+}
+//vm.form.anpai.cfg.hj='会议开始，自动外呼专家';
+(function(mui, doc) {
+	mui.init();
+	mui.ready(function() {
+		var userPicker = new mui.PopPicker();
+		userPicker.setData([{
+			value: '1',
+			text: '到达会议预约时间，自动外呼顾问'
+		}, {
+			value: '2',
+			text: '有咨询客户入会后，自动外呼顾问'
+		}, {
+			value: '3',
+			text: '所有咨询客户入会后，自动外呼顾问'
+		}, {
+			value: '4',
+			text: '与咨询客户确认后，由客服外呼顾问'
+		}]);
+		var showUserPickerButton = doc.getElementById('m-hujiaoshezhi');
+		showUserPickerButton.addEventListener('tap', function(event) {
+			userPicker.show(function(items) {
+				vm.form.anpai.cfg.hj=items[0].text;
+				vm.form.anpai.cfg.hjKey=items[0].value;
+			});
+		}, false);
+	});
+	
+
+	var btns = mui('.btn');
+	btns.each(function(i, btn) {
+		if(btn.getAttribute('id')=="starttime"){
+			var starttime=document.getElementById('starttime');
+			starttime.setAttribute('data-years',nYear),
+			starttime.setAttribute('data-months',nMoth),
+			starttime.setAttribute('data-days',nDate),
+			starttime.setAttribute('data-hour',nhou),
+			starttime.setAttribute('data-seco','00');
+		}
+		if(btn.getAttribute('id')=="m-shichang"){
+			var shichang=document.getElementById('m-shichang');
+			shichang.setAttribute('data-years',nYear),
+			shichang.setAttribute('data-months',nMoth),
+			shichang.setAttribute('data-days',nDate),
+			shichang.setAttribute('data-hour','01'),
+			shichang.setAttribute('data-seco','00');
+		}
+		btn.addEventListener('tap', function() {
+			$('.f-inp').blur();
+			var optionsJson = this.getAttribute('data-options') || '{}';
+			var options = JSON.parse(optionsJson);
+			var id = this.getAttribute('id');
+			if(id=="starttime"){
+				options.value=this.dataset.years+'-'+this.dataset.months+'-'+this.dataset.days+' '+this.dataset.hour+':'+this.dataset.seco;
+			}
+			if(id=="m-shichang"){
+				options.value=this.dataset.years+'-'+this.dataset.months+'-'+this.dataset.days+' '+this.dataset.hour+':'+this.dataset.seco;
+			}
+			//让时间控件只能选择当前时间以后的时间
+			var now=new Date();
+			options.beginYear=now.getFullYear();
+			options.beginMonth=now.getMonth()+1;
+			options.beginDay=now.getDate();
+			options.beginHours=now.getHours();
+			options.beginMinutes=now.getMinutes()+1;
+			
+			picker = new mui.DtPicker(options);
+			picker.show(function(rs) {
+				if(id=="m-shichang"){
+					vm.form.anpai.cfg.sc=rs.text;
+					shichang.setAttribute('data-years',rs.y.value),
+	    			shichang.setAttribute('data-months',rs.m.value),
+	    			shichang.setAttribute('data-days',rs.d.value),
+					shichang.setAttribute('data-hour',rs.h.value),
+	    			shichang.setAttribute('data-seco',rs.i.value);
+				}else if(id=="starttime"){
+					vm.form.anpai.cfg.sj=rs.text;
+					starttime.setAttribute('data-years',rs.y.value),
+	    			starttime.setAttribute('data-months',rs.m.value),
+	    			starttime.setAttribute('data-days',rs.d.value),
+	    			starttime.setAttribute('data-hour',rs.h.value),
+	    			starttime.setAttribute('data-seco',rs.i.value);
+				}
+				picker.dispose();
+			});
+		}, false);
+	});
+})(mui, document);

@@ -1,0 +1,548 @@
+package com.deal.controller.conference;
+
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+import com.deal.entity.create.ConferenceDetail;
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.entity.create.ConferenceRadioInfo;
+import com.deal.entity.create.ConferenceReportInfo;
+import com.deal.entity.login.UserAllInfo;
+import com.deal.service.conference.IConfEditService;
+import com.deal.service.conference.IConfInfoDetail;
+import com.deal.service.create.IConferenceService;
+import com.deal.service.mss.IMSSService;
+import com.deal.service.report.IConferenceRecordService;
+import com.deal.service.report.IMeetingReportService;
+import com.deal.util.Consts;
+import com.deal.util.DateFormatUtil;
+import com.deal.util.JsonMapper;
+import com.deal.util.Page;
+import com.deal.util.UrlBase64Util;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
+
+import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Controller;
+import org.springframework.util.ObjectUtils;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.servlet.ModelAndView;
+
+import javax.servlet.ServletOutputStream;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * 客户获取会议详情Action
+ *
+ * @author zhipeng.xu
+ */
+@Controller
+public class ConferenceInfoController{
+	private static Logger logger = LoggerFactory.getLogger(ConferenceInfoController.class);
+	@Autowired
+	private IConfInfoDetail confInfoDetail;
+	@Autowired
+	private IMeetingReportService reportService;
+	private JsonMapper jsonMapper = new JsonMapper();
+	@Autowired
+	private IMSSService mssService;
+	@Value("${record.recordPath}")
+	private String recordUrl;
+	@Autowired
+	private IConferenceRecordService radioService;
+	@Autowired
+	private IConferenceService confService;
+	@Autowired
+	private IConfEditService editService;
+
+	@GetMapping("${app.mobile.path}/conf/{confId}")
+	@ResponseBody
+	public ConferenceInfo conferenceInfo(@PathVariable @Validated String confId){
+		return confService.getConfInfoById(confId);
+	}
+
+	/**
+	 * 取得所有待办会议
+	 *
+	 * @return
+	 */
+	@RequestMapping("conf/confTodo")
+	@ResponseBody
+	public String getAllConference(HttpServletRequest request){
+		// 获取session中的用户信息
+		// 从session中拿到 客服登录的实体信息
+		UserAllInfo userInfo = (UserAllInfo) request.getSession().getAttribute("userAllInfo");
+		String billingCode = userInfo.getUserBillingcode();
+		/**
+		 * 取得今天凌晨时间beginTime
+		 */
+		Timestamp beginTime = DateFormatUtil.today();
+		// List<ConferenceInfo> listTodoConf =
+		// confInfoDetail.getAllConference(billingCode, beginTime);
+		List<Timestamp> listTodoConf = confService.getAllConfTodo(billingCode, beginTime);
+		List<Map> list = new ArrayList<>();
+		Set<String> dataSet = Sets.newHashSet();
+		for(Timestamp beginData : listTodoConf){
+			String date = DateFormatUtil.DateToStr(beginData, "yyyy-MM-dd");
+			dataSet.add(date);
+		}
+		for(String date : dataSet){
+			Map dateMap = new HashMap<>();
+			dateMap.put("dates", date);
+			list.add(dateMap);
+		}
+		String json = "";
+		for(int i = 0; i < list.size(); i++){
+			json += jsonMapper.toJson(list.get(i)) + ",";
+		}
+		String dateJson = json.equalsIgnoreCase("") ? "" : json.substring(0, json.length() - 1);
+		dateJson = "[" + dateJson + "]";
+		return dateJson;
+	}
+
+	/**
+	 * 查看会议信息
+	 */
+	@RequestMapping("conf/confInfo")
+	public String conferenceInfo(HttpServletRequest request){
+		return "conference/confList";
+	}
+
+	/**
+	 * 未结束的会议(包括未召开和已召开,不包括取消的),分页
+	 * 
+	 * @param session
+	 * @param pageNum
+	 * @param pageSize
+	 * @param refresh
+	 *            区分定时刷新和下一页
+	 * @return
+	 */
+	@RequestMapping("conf/unend/page/{pageNum}")
+	@ResponseBody
+	public ConferenceDetail confUnend4Page(HttpSession session, @PathVariable @Validated int pageNum,
+			@RequestParam(required = false, defaultValue = Consts.CONF_LIST_COUNT_FOR_EACHPAGE + "") int pageSize,
+			@RequestParam(required = false, defaultValue = "false") boolean refresh){
+		UserAllInfo userInfo = (UserAllInfo) session.getAttribute("userAllInfo");
+		String billingCode = userInfo.getUserBillingcode();
+		ConferenceDetail confDetail = new ConferenceDetail();
+//		Timestamp beginTime = new Timestamp(System.currentTimeMillis());
+		Timestamp beginTime=DateFormatUtil.today();
+		// 页面是滚动加载分页,所以定时刷新要返回第一页到当前页的所有记录
+		if(refresh){
+			pageSize = pageNum * pageSize;
+			pageNum = 1;
+		}
+		//logger.info("\n====================\nconfUnend4Page:refresh {}\n====================", refresh);
+		try{
+			confDetail = confInfoDetail.getUnendConfDetailAfterTime4Page(billingCode, beginTime, pageNum, pageSize);
+		}catch (Exception e){
+			e.printStackTrace();
+			logger.error("获取会议列表信息出错，错误信息", e.getMessage());
+		}
+		return confDetail;
+	}
+
+	/**
+	 * 显示已结束会议列表信息，带分页
+	 *
+	 * @return
+	 */
+	@RequestMapping("conf/end/page/{pageNum}")
+	@ResponseBody
+	public List<ConferenceInfo> getEndConfList(HttpSession session, @PathVariable @Validated int pageNum,
+			@RequestParam(required = false, defaultValue = Consts.CONF_LIST_COUNT_FOR_EACHPAGE + "") int pageSize){
+		Map<String, Object> result = Maps.newHashMap();
+		UserAllInfo userInfo = (UserAllInfo) session.getAttribute("userAllInfo");
+		String billingCode = userInfo.getUserBillingcode();
+		return confInfoDetail.getConfEndList(billingCode, pageNum, pageSize);
+	}
+
+	@ResponseBody
+	@RequestMapping("/conf/getOnlineAndEndConfNum")
+	public String getOnlineAndEndConfNum(HttpServletRequest request){
+		UserAllInfo userInfo = (UserAllInfo) request.getSession().getAttribute("userAllInfo");
+		JSONArray array = new JSONArray();
+		if(!ObjectUtils.isEmpty(userInfo)){
+			String billingCode = userInfo.getUserBillingcode();
+			Map<String, Integer> numMap = confInfoDetail.getOnlineAndEndConfNum(billingCode);
+			int onlineConfNum = 0;
+			int endConfNum = 0;
+			if(numMap.size() > 0){
+				onlineConfNum = numMap.get("onlineConf");
+				endConfNum = numMap.get("endConf");
+			}
+			JSONObject obj = new JSONObject();
+			obj.put("onlineNum", onlineConfNum);
+			obj.put("endNum", endConfNum);
+			array.add(obj);
+		}
+		return array.toString();
+	}
+
+	@RequestMapping("/conf/searchConf4Page")
+	@ResponseBody
+	public Page searchConf4Page(HttpServletRequest request, @RequestParam String keyword, @RequestParam String date, @RequestParam int pageNum,
+			@RequestParam(required = false, defaultValue = Consts.CONF_LIST_COUNT_FOR_EACHPAGE + "") int pageSize){
+		UserAllInfo userInfo = (UserAllInfo) request.getSession().getAttribute("userAllInfo");
+		if(ObjectUtils.isEmpty(userInfo)){
+			return null;
+		}
+		String billingCode = userInfo.getUserBillingcode();
+		if(StringUtils.isEmpty(keyword) && StringUtils.isEmpty(date)){
+			return null;
+		}
+		return confService.searchConf4Page(keyword, date, billingCode, pageNum, pageSize);
+	}
+
+	@ResponseBody
+	@RequestMapping("/conf/confListInfo")
+	public ConferenceDetail conferenceListInfo(HttpServletRequest request){
+		ConferenceDetail confDetail = new ConferenceDetail();
+		try{
+			// 获取session中的用户信息
+			// 从session中拿到 客服登录的实体信息
+			UserAllInfo userInfo = (UserAllInfo) request.getSession().getAttribute("userAllInfo");
+			if(ObjectUtils.isEmpty(userInfo)){
+				return null;
+			}
+			String billingCode = userInfo.getUserBillingcode();
+			String date = request.getParameter("date");
+			if(StringUtils.isEmpty(date)){
+				return confDetail;
+			}
+			/**
+			 * 取得今天凌晨时间和明天凌晨时间beginTime、endTime
+			 */
+			Timestamp beginTime = DateFormatUtil.str2Timestamp(date);
+			Timestamp endTime = DateFormatUtil.dateReductionDay(beginTime, -1);
+			confDetail = confInfoDetail.getConfDetail(billingCode, beginTime, endTime);
+		}catch (Exception e){
+			e.printStackTrace();
+		}
+		return confDetail;
+	}
+
+	@ResponseBody
+	@RequestMapping("/conf/getConfUser")
+	public String getConfCustList(HttpServletRequest request){
+		UserAllInfo userInfo = (UserAllInfo) request.getSession().getAttribute("userAllInfo");
+		String billingCode = userInfo.getUserBillingcode();
+		JSONArray array = new JSONArray();
+		String name = request.getParameter("name");
+		String phone = request.getParameter("phone");
+		String email = request.getParameter("email");
+		if(StringUtils.isEmpty(name) && StringUtils.isEmpty(phone) && StringUtils.isEmpty(email)){
+			return "";
+		}
+		try{
+			List<Object> custList = confInfoDetail.getConfCustList(name, phone, email,billingCode);
+			for(int i = 0; i < custList.size(); i++){
+				Object[] entity = (Object[]) custList.get(i);
+				JSONObject obj = new JSONObject();
+				obj.put("name", entity[0].toString());
+				obj.put("contry", entity[3].toString());
+				obj.put("area", entity[4].toString());
+				obj.put("phone", entity[1].toString());
+				obj.put("email", entity[2].toString());
+				array.add(obj);
+			}
+		}catch (Exception e){
+			e.printStackTrace();
+			logger.error("查询参会人信息出错，错误信息", e.getMessage());
+		}
+		return ObjectUtils.isEmpty(array) ? "" : array.toString();
+	}
+
+	/**
+	 * 根据日历控件查询会议信息
+	 */
+	@RequestMapping(value = "conf/confCalendar/{dateTime}", method = RequestMethod.GET)
+	@ResponseBody
+	public ModelAndView confCalendar(@PathVariable String dateTime, HttpServletRequest request){
+		if(dateTime == null){
+			return null;
+		}
+		ConferenceDetail confDetail = new ConferenceDetail();
+		String dateTimefin = dateTime + " 00:00:00";
+		Timestamp beginTime = DateFormatUtil.str2TimeStamp(dateTimefin);
+		Timestamp endTime = DateFormatUtil.dateReductionDay(beginTime, -1);
+		// 获取session中的用户信息
+		// 从session中拿到 客服登录的实体信息
+		UserAllInfo userInfo = (UserAllInfo) request.getSession().getAttribute("userAllInfo");
+		String billingCode = userInfo.getUserBillingcode();
+		// test
+		confDetail = confInfoDetail.getConfDetail(billingCode, beginTime, endTime);
+		return new ModelAndView("conference/temp", "confInfo", confDetail);
+	}
+
+	/**
+	 * 会后报告下载
+	 *
+	 * @param confId
+	 * @return
+	 */
+	@RequestMapping("conf/report/{confId}")
+	@ResponseBody
+	public String downloadReport(@PathVariable String confId){
+		ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+		HttpServletResponse response = attributes.getResponse();
+		/**
+		 * 详细描述：
+		 */
+		try{
+			// 根据confId 查询会后报告文件
+			List<ConferenceReportInfo> ReportList = reportService.getReportByConfId(confId);
+			if(ReportList == null || ReportList.size() == 0){
+				logger.info("此会议不存在会后报告文件，confId " + confId);
+				return "error";
+			}
+			String filePath = "";
+			String fileName = "";
+			for(ConferenceReportInfo confReport : ReportList){
+				/**
+				 * 取得会后报告下载地址URL filePath
+				 */
+				filePath = confReport.getReportUrl();
+				/**
+				 * 取得会后报告文件名fileName
+				 */
+				fileName = confReport.getReportName();
+			}
+
+			/**
+			 * 输出文件下载输出流
+			 */
+			logger.info("record download path:" + filePath);
+			// 输入流
+			FileInputStream fileInputStream = new FileInputStream(filePath);
+			// 输出流
+			ServletOutputStream servletOutputStream = response.getOutputStream();
+			// 设置文件头信息
+			response.setContentType("APPLICATION/OCTET-STREAM;charset=GBK");
+			response.setHeader("Content-Disposition", "attachment; filename=\"" + new String(fileName.getBytes("GBK"), "iso-8859-1") + "\"");
+			// Private指示对于单个用户的整个或部分响应消息，不能被共享缓存处理。这允许服务器仅仅描述当用户的部分响应消息，此响应消息对于其他用户的请求无效。
+			response.setHeader("Cache-Control", "Private");
+			// Causes the proxy cache to see the page as "stale"
+			response.setDateHeader("Expires", 0);
+			// HTTP 1.0 backwardcompatibility
+			response.setHeader("Pragma", "public");
+			byte[] bytes = new byte[20480];
+			int size = 0;
+			while((size = fileInputStream.read(bytes)) != -1){
+				servletOutputStream.write(bytes, 0, size);
+			}
+			// 关闭输入流
+			fileInputStream.close();
+			// 关闭输出流
+			servletOutputStream.close();
+		}catch (Exception e){
+			logger.error("下载会后报告异常！", e);
+			e.printStackTrace();
+			return "error";
+		}
+		return "conference/confList";
+	}
+
+	/**
+	 * 下载录音文件
+	 *
+	 * @param recordName
+	 * @return
+	 */
+	@RequestMapping("/record/{recordName}")
+	@ResponseBody
+	public String downloadRecord(@PathVariable String recordName){
+		ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+		HttpServletResponse response = attributes.getResponse();
+		/**
+		 * 详细描述：
+		 */
+		try{
+			/**
+			 * 输出文件下载输出流
+			 */
+			logger.info("解密前文件名：" + recordName);
+			String radioNamePrefix = recordName.substring(0, recordName.indexOf("."));
+			String radioNameSuffix = recordName.substring(recordName.indexOf("."));
+			String deRecordName = UrlBase64Util.decode(radioNamePrefix) + radioNameSuffix + ".zip";
+			String filePath = recordUrl;
+			if(filePath.endsWith("/") || filePath.endsWith("\\")){
+				filePath = filePath + deRecordName;
+			}else{
+				filePath = filePath + File.separator + deRecordName;
+			}
+			// 解密
+			// radioName 加密
+			/*
+			 * des.setKey("DEAL"); String desName =
+			 * des.getDesString(recordName);
+			 */
+
+			logger.info("record download path:" + filePath);
+			// 输入流
+			FileInputStream fileInputStream = new FileInputStream(filePath);
+			// 输出流
+			ServletOutputStream servletOutputStream = response.getOutputStream();
+			// 设置文件头信息
+			response.setContentType("APPLICATION/OCTET-STREAM;charset=GBK");
+			response.setHeader("Content-Disposition", "attachment; filename=\"" + new String(recordName.concat(".zip").getBytes("GBK"), "iso-8859-1") + "\"");
+			// Private指示对于单个用户的整个或部分响应消息，不能被共享缓存处理。这允许服务器仅仅描述当用户的部分响应消息，此响应消息对于其他用户的请求无效。
+			response.setHeader("Cache-Control", "Private");
+			// Causes the proxy cache to see the page as "stale"
+			response.setDateHeader("Expires", 0);
+			// HTTP 1.0 backwardcompatibility
+			response.setHeader("Pragma", "public");
+			byte[] bytes = new byte[20480];
+			int size = 0;
+			while((size = fileInputStream.read(bytes)) != -1){
+				servletOutputStream.write(bytes, 0, size);
+			}
+			// 关闭输入流
+			fileInputStream.close();
+			// 关闭输出流
+			servletOutputStream.close();
+		}catch (Exception e){
+			logger.error("下载会议录音异常！", e);
+			e.printStackTrace();
+			return "error";
+		}
+		return "success";
+	}
+
+	/**
+	 * 发送录音
+	 *
+	 * @param confId
+	 *            会议Id
+	 * @param email
+	 *            邮件
+	 * @return
+	 */
+	@RequestMapping("/conf/sendRecord")
+	@ResponseBody
+	public String sendRecord(@RequestParam("confId") String confId, @RequestParam("email") String email){
+		try{
+			ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+			HttpServletRequest request = attributes.getRequest();
+
+			if(confId == null || email == null){
+				logger.error("发送录音参数校验失败");
+				return "error";
+			}
+			String url = "http://" + request.getServerName(); // 服务器地址
+			// + ":" + request.getServerPort(); // 端口号
+			String fileUrl = url + "/deal/record/";
+			logger.info("下载地址为" + fileUrl);
+			// 根据会议Id 查询本地录音文件名
+			List<ConferenceRadioInfo> listRadio = radioService.getRadioInfoByConfId(confId);
+			List<String> listdown = new ArrayList<>();
+			for(ConferenceRadioInfo radio : listRadio){
+				// 拼接录音下载录音地址
+				String radioName = radio.getFileName();
+				// radioName 加密
+				/*
+				 * des.setKey("DEAL"); String encName =
+				 * des.getEncString(radioName);
+				 */
+
+				String radioNamePrefix = radioName.substring(0, radioName.indexOf("."));
+				String radioNameSuffix = radioName.substring(radioName.indexOf("."));
+				String download = fileUrl + UrlBase64Util.encoded(radioNamePrefix) + radioNameSuffix;
+				logger.info("录音下载地址：" + download + ",加密前文件名：" + radioName);
+				listdown.add(download);
+			}
+			/**
+			 * 发送邮件
+			 */
+			Map<String, Object> radioMap = new HashMap<String, Object>();
+			radioMap.put("radio", listdown);
+			radioMap.put("confId", confId);
+			UserAllInfo userAllInfo = (UserAllInfo) request.getSession().getAttribute(Consts.SESSION_USERALLINFO);
+			radioMap.put("userAllInfo", userAllInfo);
+			mssService.saveMailForRadio(radioMap, email);
+
+		}catch (Exception e){
+			logger.error("发送录音文件出现异常！", e);
+			return "false";
+		}
+		return "true";
+	}
+
+	@RequestMapping("/conf/confRecordStatusUpdate")
+	@ResponseBody
+	public Map<String, Object> setRecordStatus(HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		String confId = request.getParameter("confId");
+		String recordStatus = request.getParameter("status");
+		try{
+			editService.setRecordStatus(confId, recordStatus);
+			result.put("code", 1);
+			result.put("msg", "修改录音状态成功");
+		}catch (Exception e){
+			result.put("code", -1);
+			result.put("msg", e.getMessage());
+		}
+		return result;
+	}
+
+	@RequestMapping("/conf/confRecordStatus")
+	@ResponseBody
+	public Map<String, Object> getRecordStatus(HttpServletRequest request){
+		Map<String, Object> result = Maps.newHashMap();
+		String confId = request.getParameter("confId");
+		int status = editService.getRecordStatus(confId);
+		result.put("code", 1);
+		result.put("status", status);
+		result.put("msg", "获取录音状态成功");
+		return result;
+	}
+
+	/**
+	 * 获取会议信息 Created by kun.bai on 2018/3/06.
+	 */
+	@ResponseBody
+	@RequestMapping(value = "/conf/last/conference", method = RequestMethod.GET)
+	public Map<String, Object> getLastConferenceInfo(HttpServletRequest request){
+		// 从session中拿到 客服登录的实体信息
+		UserAllInfo userInfo = (UserAllInfo) request.getSession().getAttribute("userAllInfo");
+		String billingCode = userInfo.getUserBillingcode();
+		Map<String, Object> result = Maps.newHashMap();
+		// 根据账号billingcode 获取会议信息
+		ConferenceInfo conference = new ConferenceInfo();
+		conference = confService.getLastConf(billingCode);
+		if(conference != null){
+			result.put("success", "true");
+			result.put("confConfig",conference.getConfConfig());
+			result.put("tapedMark",conference.getTapedMark());
+			result.put("ifLimitParty",conference.getIfLimitParty());
+			result.put("ifMail",conference.getIfMail());
+			result.put("ifSms",conference.getIfSms());
+		}else{
+			result.put("success", "false");
+		}
+		return result;
+	}
+}

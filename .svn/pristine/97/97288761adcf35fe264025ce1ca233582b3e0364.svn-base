@@ -1,0 +1,162 @@
+<%@ page language="java" contentType="text/html; charset=UTF-8" pageEncoding="UTF-8"%>
+<%@include file="../common/base.jsp"%>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html>
+<head>
+     <meta charset="UTF-8">
+	 <meta content="yes" name="apple-mobile-web-app-capable">
+	 <meta content="yes" name="apple-touch-fullscreen">
+	 <meta content="telephone=no,email=no" name="format-detection">
+	 <meta content="maximum-dpr=1" name="flexible" />
+	 <meta name="viewport" content="initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no">
+	 <link rel="stylesheet" type="text/css" href="${CSS_PATH}/createConf.css"/>
+</head>
+<body>
+	<header id="header" class="mui-bar mui-bar-nav s-bgc-4882bf">
+		<h1 class="mui-title">安排会议</h1>
+		<button class="mui-action-back mui-btn mui-btn-blue mui-btn-link mui-btn-nav mui-pull-left"><span class="mui-icon mui-icon-left-nav"></span>返回</button>
+	</header>
+	<div id="creteConf" class="mui-content">
+	<form id="addTask">
+		<ul class="mui-input-group mui-input-group-2 f-mt15 f-p010">
+			<li class="mui-input-row-2 m-c2 f-cb f-bb-E7E7E7">
+				<label for="" class="m-c2-hd">会议主题</label>
+					<div class="m-c2-bd f-tar">
+						<input type="text" class="f-inp f-tar" v-model.trim="form.anpai.cfg.zt" data-id="zt" @change="inpchange($event.target,form.anpai.cfg.zt)" maxlength="20">
+					</div>
+			</li>
+			<li class="mui-input-row-2 m-c2 f-cb f-bb-E7E7E7">
+				<label for="" class="m-c2-hd">开始时间</label>
+					<div class="m-c2-bd f-tar btn" id="starttime" data-options='{"endYear":2020}'>
+						<div class="m-txt">{{form.anpai.cfg.sj}}</div>
+					</div>
+			</li>
+			<li class="mui-input-row-2 m-c2 f-cb f-bb-E7E7E7">
+				<label for="" class="m-c2-hd">时长</label>
+					<div class="m-c2-bd f-tar  btn" id="m-shichang" data-options='{"type":"time","value":"2017-06-06 01:30","customData":{"h":[{"value":"0","text":"00"},{"value":"1","text":"01"},{"value":"2","text":"02"},{"value":"3","text":"03"},{"value":"4","text":"04"}], "i":[{"value":"0","text":"00"},{"value":"30","text":"30"}]}}'>
+						<div class="m-txt">{{form.anpai.cfg.sc}}</div>
+					</div>
+			</li>
+		</ul>
+			<div class="m-box-zj m-box-add">
+				<div class="m-tabs m-tabs-1" v-for="(item,key) of form.anpai.zj" key="key">
+					<ul class="m-tabs-hd f-cb  f-bb0">
+						<li class="m-hd-list f-p010">
+						<div class="m-icons m-icons-2 f-fr" >
+							<span class="m-del icon u-del" data-id="delZj" ref="delZj" :data-k="key" @click="inpclick(key,form.anpai.zj,'delZj')" :class="form.anpai.zj.length==1 ? 'none' : ''" ></span>
+							<span class="m-add icon u-add" data-id="addZj" ref="addZj" :data-k="key" @click="inpclick(key,form.anpai.zj,'addZj')" :class="form.anpai.zj.length==2 ? 'none' : ''"></span>
+						</div>
+							顾问{{key+1}} <i style="color: red">*</i></li>
+					</ul>
+					<div class="m-tabs-bd">
+					<input type="hidden" name="custId" v-model.trim="item.dat.custId" data-id="custId"/>
+						<ul class="mui-input-group mui-input-group-2 f-p010">
+							<li class="mui-input-row-2 m-c2 f-cb f-bb-E7E7E7">
+								<label for="" class="m-c2-hd">姓名</label>
+								<div class="m-c2-bd f-tar">
+									<input type="text" placeholder="" class="f-inp f-tar" name="zj" v-model.trim="item.dat.nam" data-id="nam" @change="inpchange($event.target,item.dat.nam,form.anpai,key)" maxlength="20">
+								</div>
+							</li>
+							<li class="mui-input-row-2 m-c2 f-cb f-bb-E7E7E7">
+								<label for="" class="m-c2-hd1">电话</label>
+								<div class="mui-input-row-2 m-c2 f-p015 f-cb">
+									<div class="m-c2-hd m-inp-guo" name="zj-code">
+										<input type="text" class="f-inp" :id="item.dat.sign+'country'" placeholder="+86" name="zj" v-model.trim="item.dat.guo" data-id="guo" @tap="selectContryCode(item)" @change="inpchange($event.target,item.dat.guo,form.anpai,key,item)" maxlength="5">
+									</div>
+									<div class="m-c2-bd">
+										<div class="f-inp-qh1">
+											<input type="text" placeholder="区号" id="area" name="zj" class="f-inp " v-model.trim="item.dat.quh" data-id="quh" @change="inpchange($event.target,item.dat.quh,form.anpai,key)" maxlength="4">
+										</div>
+										<input type="text" placeholder="电话号码" id="phoneNum" name="zj" class="f-tel" v-model.trim="item.dat.pho" data-id="pho" @change="inpchange($event.target,item.dat.pho,form.anpai,key)" maxlength="20">
+									</div>
+								</div>
+							</li>
+							<li class="mui-input-row-2 m-c2 f-cb f-bb-E7E7E7">
+								<label for="" class="m-c2-hd">邮箱</label>
+								<div class="m-c2-bd f-tar">
+									<input type="text" placeholder="" class="f-inp f-tar" name="zj" v-model.trim="item.dat.ema" data-id="ema" @change="inpchange($event.target,item.dat.ema,form.anpai,key)" maxlength="50">
+								</div>
+							</li>
+						</ul>
+					</div>
+				</div>
+			</div>
+			<div class="m-box-kh m-box-add">
+				<div class="m-tabs m-tabs-1 " v-for="(item,key) of form.anpai.kh" key="key">
+					<ul class="m-tabs-hd f-cb  f-bb0">
+						<li class="m-hd-list f-p010">
+							<div class="m-icons m-icons-2 f-fr" >
+								<span class="m-del icon u-del" data-id="delKh" ref="delKh" :data-k="key" @click="inpclick(key,form.anpai.kh,'delKh')" :class="form.anpai.kh.length==1 ? 'none' : ''"></span>
+								<span class="m-add icon u-add" data-id="addKh" ref="addKh" :data-k="key" @click="inpclick(key,form.anpai.kh,'addKh')" :class="form.anpai.kh.length==10 ? 'none' : ''"></span>
+							</div>
+							咨询客户{{key+1}}</li>
+					</ul>
+					<div class="m-tabs-bd">
+					<input type="hidden" name="custId" v-model.trim="item.dat.custId" data-id="custId"/>
+						<ul class="mui-input-group mui-input-group-2 f-p010">
+							<li class="mui-input-row-2 m-c2 f-cb f-bb-E7E7E7">
+								<label for="" class="m-c2-hd">姓名</label>
+								<div class="m-c2-bd f-tar">
+									<input type="text" placeholder="" class="f-inp f-tar" name="kh" v-model.trim="item.dat.nam" data-id="nam" @change="inpchange($event.target,item.dat.nam,form.anpai,key)" maxlength="20">
+								</div>
+							</li>
+							<li class="mui-input-row-2 m-c2 f-cb f-bb-E7E7E7">
+								<label for="" class="m-c2-hd1">电话</label>
+								<div class="mui-input-row-2 m-c2 f-p015 f-cb">
+									<div class="m-c2-hd m-inp-guo" name="kh-code">
+										<input type="text" class="f-inp" :id="item.dat.sign+'country'" placeholder="+86" name="kh" v-model.trim="item.dat.guo" data-id="guo" @tap="selectContryCode(item)" @change="inpchange($event.target,item.dat.guo,form.anpai,key,item)" maxlength="5">
+									</div>
+									<div class="m-c2-bd">
+										<div class="f-inp-qh1">
+											<input type="text" placeholder="区号" id="area" name="kh" class="f-inp" v-model.trim="item.dat.quh" data-id="quh" @change="inpchange($event.target,item.dat.quh,form.anpai,key)" maxlength="4">
+										</div>
+										<input type="text" placeholder="电话号码" id="phoneNum" name="kh" class="f-tel" v-model.trim="item.dat.pho" data-id="pho" @change="inpchange($event.target,item.dat.pho,form.anpai,key)" maxlength="20">
+									</div>	
+								</div>
+							</li>
+							<li class="mui-input-row-2 m-c2 f-cb f-bb-E7E7E7">
+								<label for="" class="m-c2-hd">邮箱</label>
+								<div class="m-c2-bd f-tar">
+									<input type="text" placeholder="" class="f-inp f-tar" name="kh" v-model.trim="item.dat.ema" data-id="ema" @change="inpchange($event.target,item.dat.ema,form.anpai,key)" maxlength="50">
+								</div>
+							</li>
+						</ul>
+					</div>
+				</div>
+			</div>	
+			<div class="m-box-hysz">
+				<div class="m-tabs m-tabs-1">
+					<ul class="m-tabs-hd f-cb  f-bb0">
+						<li class="m-hd-list f-p010">会议设置</li>
+					</ul>
+					<div class="m-tabs-bd">
+						<ul class="mui-input-group mui-input-group-2 f-p010">
+							<li class="mui-input-row-2 m-c2 f-cb f-bb-E7E7E7">
+								<label for="" class="m-c2-hd">外呼设置</label>
+								<div class="m-c2-bd f-tar" id="m-hujiaoshezhi">
+									<div class="m-txt f-toe" id="userResult">{{form.anpai.cfg.hjConfig[form.anpai.cfg.hjKey]}}</div>
+								</div>
+							</li>
+							<li class="mui-input-row-2 m-c2 f-cb f-bb-E7E7E7 f-pr">
+								<label for="" class="m-c2-hd m-c2-hd-1">启动会议自动录音</label>
+								<div class="m-c2-bd f-tar">
+									<div id="recordBtn" class="mui-switch mui-switch-mini f-fr">
+										<div class="mui-switch-handle"></div>
+									</div>
+								</div>
+				  			</li>	
+				  		</ul>
+					</div>
+				</div>
+			</div>
+		<!--<div class="f-h50"></div>-->
+		<div class="m-foot f-mt20">
+			<div class="mui-input-row-2 m-btn-3">
+				 <button type="button" class="mui-btn mui-btn-primary mui-btn-block f-btn f-btn-middle s-bgc-4882bf" data-id="addConf" ref="addConf"  @click="inpclick($event.target,form.anpai)" >{{form.buttonName}}</button>
+			</div>
+		</div>
+	</form>
+	</div>
+</body>
+<script type="text/javascript" src="${JS_PATH}/app/create/createConf.js"></script>
+</html>

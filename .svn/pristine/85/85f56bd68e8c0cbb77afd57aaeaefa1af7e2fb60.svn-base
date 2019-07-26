@@ -1,0 +1,87 @@
+package com.deal.service.task;
+
+import java.sql.Timestamp;
+import java.util.List;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.BeanUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import com.deal.dao.create.ConferenceDao;
+import com.deal.dao.create.ConferenceHistoryDao;
+import com.deal.dao.create.CustomerDao;
+import com.deal.dao.create.CustomerHistoryDao;
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.entity.create.ConferenceInfoHistory;
+import com.deal.entity.create.CustomerInfo;
+import com.deal.entity.create.CustomerInfoHistory;
+import com.deal.monitor.cache.RedisService;
+import com.deal.util.DateFormatUtil;
+import com.google.common.collect.Lists;
+
+@Component("conferenceInfoToHistoryJob")
+public class ConferenceInfoToHistoryJob{
+	private static Logger logger = LoggerFactory.getLogger(ConferenceInfoToHistoryJob.class);
+	@Autowired
+	private ConferenceDao confDao;
+	@Autowired
+	private CustomerDao custDao;
+	@Autowired
+	private ConferenceHistoryDao confHisDao;
+	@Autowired
+	private CustomerHistoryDao custHisDao;
+
+	public synchronized void execute(){
+		Timestamp currTime = new Timestamp(System.currentTimeMillis());
+		Timestamp beforeThreeMonthTime = DateFormatUtil.addMonthInTimestamp(currTime, -3);
+		List<ConferenceInfo> successConfList = Lists.newArrayList();
+		List<CustomerInfo> successCustList = Lists.newArrayList();
+		List<ConferenceInfo> confList = confDao.getConfListBeforeThrMon(beforeThreeMonthTime);
+		logger.info("查询出三月前的会议条数"+confList.size());
+		for(ConferenceInfo conf : confList){
+			if(!RedisService.IsExistOper(String.valueOf(conf.getConfId()), "conferenceInfoToHistoryJob")){
+				RedisService.putOperToCache(String.valueOf(conf.getConfId()), "conferenceInfoToHistoryJob");
+				ConferenceInfoHistory confHistory = new ConferenceInfoHistory();
+				BeanUtils.copyProperties(conf, confHistory);
+				List<CustomerInfo> custList = custDao.getThrMonConfCustList(conf.getConfId());
+				for(CustomerInfo cust : custList){
+					CustomerInfoHistory custHistory = new CustomerInfoHistory();
+					BeanUtils.copyProperties(cust, custHistory);
+					custHistory.setConfInfo(cust.getConfInfo().getConfId());
+					try{
+						custHisDao.save(custHistory);
+						successCustList.add(cust);
+					}catch (Exception e){
+						e.printStackTrace();
+						logger.error("保存三月前会议参会人信息到历史表出错", e.getMessage());
+					}
+				}
+				try{
+					confHisDao.save(confHistory);
+					successConfList.add(conf);
+				}catch (Exception e){
+					e.printStackTrace();
+					logger.error("保存三月会议信息到历史表出错", e.getMessage());
+				}
+			}
+		}
+		for(CustomerInfo cust : successCustList){
+			try{
+				custDao.deleteById(cust.getCustId());
+			}catch (Exception e){
+				e.printStackTrace();
+				logger.error("删除三月前会议参会人信息出错", e.getMessage());
+			}
+		}
+		for(ConferenceInfo conf : successConfList){
+			try{
+				confDao.deleteById(conf.getConfId());
+			}catch (Exception e){
+				e.printStackTrace();
+				logger.error("删除三月会议信息出错", e.getMessage());
+			}
+		}
+	}
+}

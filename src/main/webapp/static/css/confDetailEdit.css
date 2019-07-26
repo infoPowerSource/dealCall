@@ -1,0 +1,28 @@
+@CHARSET "UTF-8";
+.pub-table tbody{
+	overflow-y:scroll !important;
+}
+
+#showCallOther td {
+	padding-left: 15px;
+}
+
+#showCallOther #otherName {
+	margin-left: -8px
+}
+
+#showCallOther  .tel-group {
+	margin-left: -3px
+}
+
+#showCallOther .td-control-call.td-call-box {
+	margin-left: 18px
+}
+
+.pub-table .user-item .connect{
+	color:#548ccc;
+}
+
+.pub-table tbody tr td:nth-child(4){
+	padding-left:6px
+}

@@ -1,0 +1,444 @@
+package com.deal.service.mss.impl;
+
+import java.net.URI;
+import java.sql.Timestamp;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import com.deal.dao.mss.MailSendRecordDao;
+import com.deal.entity.mss.MSSSendRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.util.ObjectUtils;
+import org.springframework.util.StringUtils;
+
+import com.deal.dao.create.ConfAccessNumDao;
+import com.deal.dao.create.ConferenceDao;
+import com.deal.dao.mss.MailSendDao;
+import com.deal.dao.mss.MailSendTaskDao;
+import com.deal.dao.mss.MailTemplateDao;
+import com.deal.entity.create.ConferenceAccessNumber;
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.entity.create.CustomerInfo;
+import com.deal.entity.gnet.GnetSsMailSendingTask;
+import com.deal.entity.login.UserAllInfo;
+import com.deal.entity.mss.MSSSendTask;
+import com.deal.entity.mss.MSSTemplate;
+import com.deal.entity.support.SupportInfo;
+import com.deal.service.mss.IMSSService;
+import com.deal.util.Consts;
+import com.deal.util.DateFormatUtil;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+
+import net.fortuna.ical4j.model.Calendar;
+import net.fortuna.ical4j.model.DateTime;
+import net.fortuna.ical4j.model.Dur;
+import net.fortuna.ical4j.model.ValidationException;
+import net.fortuna.ical4j.model.component.VAlarm;
+import net.fortuna.ical4j.model.component.VEvent;
+import net.fortuna.ical4j.model.parameter.Cn;
+import net.fortuna.ical4j.model.parameter.FmtType;
+import net.fortuna.ical4j.model.parameter.Language;
+import net.fortuna.ical4j.model.parameter.Rsvp;
+import net.fortuna.ical4j.model.parameter.XParameter;
+import net.fortuna.ical4j.model.property.Action;
+import net.fortuna.ical4j.model.property.Attendee;
+import net.fortuna.ical4j.model.property.CalScale;
+import net.fortuna.ical4j.model.property.Clazz;
+import net.fortuna.ical4j.model.property.Created;
+import net.fortuna.ical4j.model.property.Description;
+import net.fortuna.ical4j.model.property.DtEnd;
+import net.fortuna.ical4j.model.property.DtStart;
+import net.fortuna.ical4j.model.property.Method;
+import net.fortuna.ical4j.model.property.Organizer;
+import net.fortuna.ical4j.model.property.Priority;
+import net.fortuna.ical4j.model.property.ProdId;
+import net.fortuna.ical4j.model.property.Sequence;
+import net.fortuna.ical4j.model.property.Status;
+import net.fortuna.ical4j.model.property.Summary;
+import net.fortuna.ical4j.model.property.Transp;
+import net.fortuna.ical4j.model.property.Uid;
+import net.fortuna.ical4j.model.property.Version;
+import net.fortuna.ical4j.model.property.XProperty;
+
+@Service
+public class MSSServiceImpl implements IMSSService{
+	private static Logger logger = LoggerFactory.getLogger(MSSServiceImpl.class);
+
+	@Autowired
+	private MailSendTaskDao taskDao;
+	@Autowired
+	private MailTemplateDao templateDao;
+	@Autowired
+	ConferenceDao conferenceDao;
+	@Autowired
+	private MailSendDao sendDao;
+	@Autowired
+	private MailSendRecordDao mailSendRecordDao;
+	@Value("${email.server.address}")
+	private String emailServerAddress;
+	@Value("${email.defaultEmailSenderAddress}")
+	private String emailSenderAddress;
+	@Value("${platform2moreAccessNumber}")
+	private String moreAccessNumberFor2;
+	@Value("${platform7moreAccessNumber}")
+	private String moreAccessNumberFor7;
+	@Autowired
+	private ConfAccessNumDao accessDao;
+
+	public void sendMailByTask(Map<String, Object> params) throws ValidationException{
+		String mailType = params.get("mailType").toString();
+		int type = Integer.valueOf(mailType);
+		MSSTemplate template = templateDao.getTemplateBymailType(type);
+		if(template == null){
+			logger.error("没有可用的模板,模板类型：" + mailType);
+		}else{
+			if(type == Consts.EMAIL_TYPE_FOR_SUPPORT_ACCOUNT_ACTIVE){
+				sendMainForSupport(params, template);
+			}else{
+				mailForConference(params, type, template);
+			}
+		}
+	}
+
+	private void mailForConference(Map<String, Object> params, int type, MSSTemplate template) throws ValidationException{
+		VEvent meeting = new VEvent();
+		ConferenceInfo confInfo = (ConferenceInfo) params.get("confInfo");
+		CustomerInfo custInfo = (CustomerInfo) params.get("custInfo");
+		List<CustomerInfo> custmerinfo = (List<CustomerInfo>) params.get("custList");
+		// Set<CustomerInfo> custmerinfo = confInfo.getCustRelation();
+		List<CustomerInfo> expert = Lists.newArrayList();
+		getCustemerAndExpert(custmerinfo, expert);
+		// 日历邮件,符合ical4j规范
+		DateTime start = new DateTime(confInfo.getBeginTime());
+		DateTime end = new DateTime(confInfo.getEndTime());
+		meeting.getProperties().add(new DtStart(start, true));
+		meeting.getProperties().add(new DtEnd(end, true));
+		Attendee dev;
+		// for(CustomerInfo cust : custmerinfo){
+		dev = new Attendee(URI.create("mailto:" + custInfo.getCustEmail()));
+		dev.getParameters().add(new Cn(custInfo.getCustName()));
+		dev.getParameters().add(Rsvp.TRUE);
+		meeting.getProperties().add(dev);
+		// }
+		String mailTitle = "";
+		if(type == Consts.EMAIL_TYPE_FOR_INFORM_CUSTOMER || type == Consts.EMAIL_TYPE_FOR_INFORM_EXPERT){
+			mailTitle = Consts.CONFERENCE_INFO_PROFIX + confInfo.getConfName();
+		}else if(type == Consts.EMAIL_TYPE_FOR_INFORM_CANCEL_EXPERT || type == Consts.EMAIL_TYPE_FOR_INFORM_CANCEL_CUSTOMER){
+			mailTitle = Consts.CONFERENCE_CANCEL_PROFIX + confInfo.getConfName();
+		}else if(type == Consts.EMAIL_TYPE_FOR_INFORM_CHANGE_CUSTOMER || type == Consts.EMAIL_TYPE_FOR_INFORM_CHANGE_EXPERT){
+			mailTitle = Consts.CONFERENCE_CHANGE_PROXIF + confInfo.getConfName();
+		}
+		Organizer organizer = new Organizer(URI.create(emailSenderAddress));
+		organizer.getParameters().add(new Cn(Consts.EMAIL_MSS_SEND_NAME));
+		meeting.getProperties().add(organizer);
+		meeting.getProperties().add(new Priority(0));
+		meeting.getProperties().add(new Sequence(0));
+		meeting.getProperties().add(Transp.OPAQUE);
+		meeting.getProperties().add(Status.VEVENT_CONFIRMED);
+		Summary summary = new Summary(mailTitle);
+		summary.getParameters().add(new Language("zh-CN"));
+		meeting.getProperties().add(summary);
+		meeting.getProperties().add(Clazz.PUBLIC);
+		meeting.getProperties().add(new Created(new DateTime()));
+		MSSSendTask mailTask = new MSSSendTask();
+		String contentExt = "";
+		String content = template.getTemplateContent();
+		if(type == Consts.EMAIL_TYPE_FOR_INFORM_CUSTOMER){
+			content = getMailContentOfInfoCustomer(template, confInfo, expert, content);
+			contentExt = getical4JContent(confInfo, meeting, content, type);
+			mailTask.setEmailType(Consts.EMAIL_TYPE_FOR_INFORM_CUSTOMER);
+		}else if(type == Consts.EMAIL_TYPE_FOR_INFORM_CANCEL_EXPERT){
+			content = getMailContentOfInformExpert(template, confInfo, content, custInfo.getCustTel());
+			contentExt = getical4JContent(confInfo, meeting, content, type);
+			mailTask.setEmailType(Consts.EMAIL_TYPE_FOR_INFORM_CANCEL_EXPERT);
+		}else if(type == Consts.EMAIL_TYPE_FOR_INFORM_CANCEL_CUSTOMER){
+			content = getMailContentOfInfoCustomer(template, confInfo, expert, content);
+			contentExt = getical4JContent(confInfo, meeting, content, type);
+			mailTask.setEmailType(Consts.EMAIL_TYPE_FOR_INFORM_CANCEL_CUSTOMER);
+		}else if(type == Consts.EMAIL_TYPE_FOR_INFORM_EXPERT){
+			content = getMailContentOfInformExpert(template, confInfo, content, custInfo.getCustTel());
+			contentExt = getical4JContent(confInfo, meeting, content, type);
+			mailTask.setEmailType(Consts.EMAIL_TYPE_FOR_INFORM_EXPERT);
+		}else if(type == Consts.EMAIL_TYPE_FOR_INFORM_CHANGE_CUSTOMER){
+			content = getMailContentOfInfoCustomer(template, confInfo, expert, content);
+			contentExt = getical4JContent(confInfo, meeting, content, type);
+			mailTask.setEmailType(Consts.EMAIL_TYPE_FOR_INFORM_CHANGE_CUSTOMER);
+		}else if(type == Consts.EMAIL_TYPE_FOR_INFORM_CHANGE_EXPERT){
+			content = getMailContentOfInformExpert(template, confInfo, content, custInfo.getCustTel());
+			contentExt = getical4JContent(confInfo, meeting, content, type);
+			mailTask.setEmailType(Consts.EMAIL_TYPE_FOR_INFORM_CHANGE_EXPERT);
+		}
+		mailTask.setEmailTitle(mailTitle);
+		mailTask.setEmailContent(content);
+		putDataIntoSendTask(template, contentExt, custInfo, mailTask);
+		saveDateToSendTask(mailTask);
+	}
+
+	private void getCustemerAndExpert(List<CustomerInfo> custmerinfo, List<CustomerInfo> expert){
+		for(CustomerInfo cust : custmerinfo){
+			if(cust.getCustType() == Consts.CONFERENCE_PARTY_TYPE_FOR_EXPERT){
+				expert.add(cust);
+			}
+		}
+	}
+
+	private String getMailContentOfInformExpert(MSSTemplate template, ConferenceInfo confInfo, String content, String custTel){
+		Map<String, String> dataMap = Maps.newHashMap();
+		dataMap.put("${userDisplayName}", confInfo.getConfCreater());
+		dataMap.put("${emailTitle}", confInfo.getConfName());
+		dataMap.put("${beginTime}", getBeginTime(confInfo.getBeginTime()));
+		dataMap.put("${durationTime}", DateFormatUtil.getDurationTime(confInfo.getBeginTime(), confInfo.getConfDuration()));
+		dataMap.put("${custTel}", custTel);
+		for(Map.Entry<String, String> entry : dataMap.entrySet()){
+			content = StringUtils.replace(content, entry.getKey(), entry.getValue());
+		}
+		return content;
+	}
+
+	private void putDataIntoSendTask(MSSTemplate template, String contentExt, CustomerInfo custInfo, MSSSendTask mailTask){
+		mailTask.setEmailReceiver(custInfo.getCustEmail());
+		mailTask.setEmailContentExt(contentExt);
+		mailTask.setReceiveName(custInfo.getCustName());
+		mailTask.setIsHandle(Consts.IS_NOT_HANDLE_FLAG);
+		mailTask.setEmailSender(emailSenderAddress);
+	}
+
+	private String getical4JContent(ConferenceInfo confInfo, VEvent meeting, String content, int type) throws ValidationException{
+		Description desc = new Description(content);
+		desc.getParameters().add(new FmtType("text/plain"));
+		meeting.getProperties().add(desc);
+		Uid id = new Uid(); // 会议ID
+		id.setValue(String.valueOf(confInfo.getConfId()));
+		meeting.getProperties().add(id);
+		// 15分钟提醒
+		VAlarm alarm = new VAlarm(new Dur(0, 0, Consts.CONFERENCE_ALARM_TIME * -1, 0));
+		alarm.getProperties().add(Action.DISPLAY);
+		Calendar icsCalendar = new Calendar();
+		icsCalendar.getProperties().add(new ProdId("-//Events Calendar//iCal4j 1.0//EN"));
+		icsCalendar.getProperties().add(Version.VERSION_2_0);
+		if(type == Consts.EMAIL_TYPE_FOR_INFORM_CUSTOMER || type == Consts.EMAIL_TYPE_FOR_INFORM_EXPERT){
+			icsCalendar.getProperties().add(Method.REQUEST);
+		}else if(type == Consts.EMAIL_TYPE_FOR_INFORM_CANCEL_EXPERT || type == Consts.EMAIL_TYPE_FOR_INFORM_CANCEL_CUSTOMER){
+			icsCalendar.getProperties().add(Method.CANCEL);
+		}else if(type == Consts.EMAIL_TYPE_FOR_INFORM_CHANGE_CUSTOMER || type == Consts.EMAIL_TYPE_FOR_INFORM_CHANGE_EXPERT){
+			icsCalendar.getProperties().add(Method.REQUEST);
+		}
+		icsCalendar.getProperties().add(CalScale.GREGORIAN);
+		XProperty altDesc = new XProperty("X-ALT-DESC", content.replaceAll("<br>", ""));
+		altDesc.getParameters().add(new XParameter("FMTTYPE", "text/plain"));
+		meeting.getProperties().add(altDesc);
+		icsCalendar.getComponents().add(meeting);
+		icsCalendar.validate();
+		String contentExt = icsCalendar.toString();
+		return contentExt;
+	}
+
+	private String getMailContentOfCancalExpert(MSSTemplate template, ConferenceInfo confInfo, String content){
+		Map<String, String> dataMap = Maps.newHashMap();
+		dataMap.put("${userDisplayName}", confInfo.getConfCreater());
+		dataMap.put("${emailTitle}", confInfo.getConfName());
+		dataMap.put("${beginTime}", getBeginTime(confInfo.getBeginTime()));
+		dataMap.put("${durationTime}", DateFormatUtil.getDurationTime(confInfo.getBeginTime(), confInfo.getConfDuration()));
+		for(Map.Entry<String, String> entry : dataMap.entrySet()){
+			content = StringUtils.replace(content, entry.getKey(), entry.getValue());
+		}
+		logger.info("邮件内容：" + content);
+		return content;
+	}
+
+	private String getMailContentOfInfoCustomer(MSSTemplate template, ConferenceInfo confInfo, List<CustomerInfo> expert, String content){
+		Map<String, String> dataMap = Maps.newHashMap();
+		ConferenceAccessNumber accessNum=null;
+		if(confInfo.getBridgeName().equalsIgnoreCase(Consts.PLATEFORM_FOR_SEVEN)){
+			accessNum = accessDao.getAccessNumber(confInfo.getBridgeName(), "英文");
+		}else{
+			accessNum = accessDao.getAccessNumber(confInfo.getBridgeName(), "中文");
+		}
+		dataMap.put("${userDisplayName}", confInfo.getConfCreater());
+		dataMap.put("${emailTitle}", confInfo.getConfName());
+		dataMap.put("${beginTime}", getBeginTime(confInfo.getBeginTime()));
+		dataMap.put("${durationTime}", DateFormatUtil.getDurationTime(confInfo.getBeginTime(), confInfo.getConfDuration()));
+		dataMap.put("${chairmanPassword}", confInfo.getChairmanPassword());
+		if(!ObjectUtils.isEmpty(accessNum)){
+			dataMap.put("${accessNumber}", accessNum.getTelNum());
+			if(accessNum.getBridgeName().equalsIgnoreCase(Consts.PLATEFORM_FOR_TWO)){
+				dataMap.put("${moreAccessNum}", moreAccessNumberFor2);
+			}else if(accessNum.getBridgeName().equalsIgnoreCase(Consts.PLATEFORM_FOR_SEVEN)){
+				dataMap.put("${moreAccessNum}", moreAccessNumberFor7);
+			}
+		}
+		String experName = "";
+		// if(expert.size() > 0){
+		// experName = expert.get(0).getCustName();
+		// for(int i = 1; i < expert.size(); i++){
+		// experName = experName + "," + expert.get(1).getCustName();
+		// }
+		// }
+		// dataMap.put("${expertName}", experName);
+		// logger.info("专家名称：" + experName);
+		for(Map.Entry<String, String> entry : dataMap.entrySet()){
+			content = StringUtils.replace(content, entry.getKey(), entry.getValue());
+		}
+		logger.info("邮件内容：" + content);
+		return content;
+	}
+
+	// private String getDurationTime(Timestamp beginTime, int duration){
+	// String hour = String.valueOf(beginTime.getHours());
+	// int minute = beginTime.getMinutes();
+	// int durationHour = duration / 60;
+	// int durationMinute = duration % 60;
+	// minute += durationMinute;
+	// String endHour = String.valueOf(beginTime.getHours() + durationHour);
+	// String result = hour + ":" + String.valueOf(minute) + "~" + endHour + ":"
+	// + String.valueOf(minute);
+	// String otherResult = hour + ":0" + String.valueOf(minute) + "~" + endHour
+	// + ":0" + String.valueOf(minute);
+	// return minute > 9 ? result : otherResult;
+	// }
+
+	private String getBeginTime(Timestamp beginTime){
+		return DateFormatUtil.timeStamaps2StrFormat(beginTime);
+	}
+
+	private void sendMainForSupport(Map<String, Object> params, MSSTemplate template){
+		Map<String, String> dataMap = Maps.newHashMap();
+		MSSSendTask mailTask = new MSSSendTask();
+		SupportInfo supportInfo = (SupportInfo) params.get("supportInfo");
+		String supportName = supportInfo.getSupportName();
+		dataMap.put("${supportName}", supportName);
+		String content = template.getTemplateContent();
+		for(Map.Entry<String, String> entry : dataMap.entrySet()){
+			content = StringUtils.replace(content, entry.getKey(), entry.getValue());
+		}
+		mailTask.setEmailContent(content);
+		mailTask.setEmailReceiver(supportInfo.getSupportEmail());
+		mailTask.setReceiveName(supportInfo.getSupportName());
+		mailTask.setEmailTitle(template.getEmailTitle());
+		mailTask.setEmailType(Consts.EMAIL_TYPE_FOR_SUPPORT_ACCOUNT_ACTIVE);
+		mailTask.setIsHandle(Consts.IS_NOT_HANDLE_FLAG);
+		mailTask.setEmailSender(emailSenderAddress);
+		saveDateToSendTask(mailTask);
+	}
+
+	private void saveDateToSendTask(MSSSendTask mailTask){
+		try{
+			taskDao.save(mailTask);
+		}catch (Exception e){
+			logger.error("保存邮件发送任务信息出错，邮件主题：" + mailTask.getEmailTitle() + "错误信息:" + e);
+		}
+	}
+
+	@Override
+	public void sendMailForChangePwd(Map<String, String> params){
+		String userDisplayName = params.get("userDisplayName");
+		String userEmail = params.get("userEmail");
+		String emailContent = params.get("emailContent");
+		// 下面是正式的代码，上面是为了测试修改
+		GnetSsMailSendingTask send = new GnetSsMailSendingTask();
+		send.setIsHandled((short) Consts.IS_NOT_HANDLE_FLAG);
+		send.setResultCode((short) Consts.EMAIL_MSS_RESULT_CODE);
+		send.setCreateTime(new Timestamp(System.currentTimeMillis()));
+		send.setPostfixAddress(emailServerAddress);
+		send.setMailContent(emailContent);
+		send.setMailTitle(Consts.EMAIL_MSS_RESET_PASSWORD_TITLE);
+		send.setReceiverAddress(userEmail);
+		send.setSenderAddress(emailSenderAddress);
+		send.setSenderName(Consts.EMAIL_MSS_SEND_NAME);
+		send.setReceiverName(userDisplayName);
+		send.setSsMailId((long) Consts.EMAIL_MSS_NEGATIVE_FLAG);
+		send.setType((short) Consts.EMAIL_GNET_CONTENT_TYPE);
+		send.setSsMailRecipientId((long) 0);
+		send.setUpdateTime(new Timestamp(System.currentTimeMillis()));
+		try{
+			sendDao.save(send);
+		}catch (Exception e){
+			logger.error("存入MSS服务器数据库出错，邮件收件人地址:" + userEmail + "收件人姓名:" + userDisplayName + "错误信息:" + e.toString());
+		}
+	}
+
+	@Override
+	public void saveMailForRadio(Map radioMap, String email){
+		String userDisplayName = "quanshi";
+		List emailContent = (List) radioMap.get("radio");
+		String confId = (String) radioMap.get("confId");
+
+		MSSTemplate template = templateDao.getTemplateBymailType(Consts.EMAIL_TYPE_FOR_INFORM_RADIO);
+		if(template == null){
+			logger.error("没有可用的模板,模板类型：" + Consts.EMAIL_TYPE_FOR_INFORM_RADIO);
+			return;
+		}
+
+		ConferenceInfo conferenceInfo = conferenceDao.getConfInfoById(confId);
+		if(null == conferenceInfo){
+			logger.error("没有可用的conferenceInfo,confId：" + confId);
+			return;
+		}
+
+		UserAllInfo userAllInfo = (UserAllInfo) radioMap.get("userAllInfo");
+		if(null == userAllInfo){
+			logger.error("没有可用的userAllInfo");
+			return;
+		}
+		String content = template.getTemplateContent();
+		String confName = conferenceInfo.getConfName();
+		String userDisplayNamea = userAllInfo.getUserDisplayName();
+		logger.info("发送录音需要内容：confName:" + confName + ",userDisplayNamea:" + userDisplayNamea);
+		String listContent = "";
+		// 拼接邮件内容
+		StringBuffer buffer = new StringBuffer();
+		buffer.append("<table>");
+		for(int i = 0; i < emailContent.size(); i++){
+			listContent += "<tr><td>录音" + (i + 1) + "：<a href=" + emailContent.get(i) + ">" + emailContent.get(i) + "</a></td></tr>";
+		}
+		buffer.append(listContent);
+		buffer.append("</table>");
+
+		Map<String, String> dataMap = Maps.newHashMap();
+		dataMap.put("${userDisplayName}", userDisplayNamea);
+		dataMap.put("${confName}", confName);
+		dataMap.put("${radioList}", buffer.toString());
+		logger.info("发送录音需要内容,radioList：" + buffer.toString());
+		for(Map.Entry<String, String> entry : dataMap.entrySet()){
+			content = StringUtils.replace(content, entry.getKey(), entry.getValue());
+		}
+		logger.info("发送录音需要内容：" + content);
+		GnetSsMailSendingTask send = new GnetSsMailSendingTask();
+		send.setIsHandled((short) Consts.IS_NOT_HANDLE_FLAG);
+		send.setResultCode((short) Consts.EMAIL_MSS_RESULT_CODE);
+		send.setCreateTime(new Timestamp(System.currentTimeMillis()));
+		send.setPostfixAddress(emailServerAddress);
+		send.setMailContent(content);
+		send.setMailTitle("录音文件");
+		send.setReceiverAddress(email);
+		send.setSenderAddress(emailSenderAddress);
+		send.setSenderName(Consts.EMAIL_MSS_SEND_NAME);
+		send.setReceiverName(userDisplayName);
+		send.setSsMailId((long) Consts.EMAIL_MSS_NEGATIVE_FLAG);
+		send.setType((short) Consts.EMAIL_GNET_CONTENT_TYPE);
+		send.setSsMailRecipientId((long) 0);
+		send.setUpdateTime(new Timestamp(System.currentTimeMillis()));
+		//保存发送记录
+		MSSSendRecord mssSendRecord = new MSSSendRecord();
+		mssSendRecord.setEmailProject(confId+"录音文件");
+		mssSendRecord.setEmailSender(emailSenderAddress);
+		mssSendRecord.setIfSuccess((short) Consts.IS_NOT_HANDLE_FLAG);
+		mssSendRecord.setConfInfo(conferenceInfo);
+		mssSendRecord.setEmailReceiver(email);
+		mssSendRecord.setEmailType(Consts.EMAIL_TYPE_FOR_INFORM_RADIO);
+		try{
+			sendDao.save(send);
+			mssSendRecord.setSentTime(new Timestamp(System.currentTimeMillis()));
+			mailSendRecordDao.save(mssSendRecord);
+		}catch (Exception e){
+			logger.error("录音发送失败，邮件收件人地址:" + email + e.toString());
+		}
+	}
+}

@@ -1,0 +1,453 @@
+package com.deal.service.report.impl;
+
+import java.sql.SQLException;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import com.deal.dao.create.PartyDao;
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.entity.create.ConferenceWaitMake;
+import com.deal.entity.party.PartyInfo;
+import com.deal.entity.report.ConfCDR;
+import com.deal.entity.report.ConfDetailCDR;
+import com.deal.entity.report.ConfDetailInput;
+import com.deal.entity.report.ConfInput;
+import com.deal.entity.report.GetConfDetailInput;
+import com.deal.entity.report.GetConfInput;
+import com.deal.service.create.IConferenceService;
+import com.deal.service.report.IConfCDRManagerService;
+import com.deal.service.report.IConfCdrService;
+import com.deal.service.report.IExcelService;
+import com.deal.util.Consts;
+import com.deal.util.DateFormatUtil;
+import com.deal.util.JSONUtil;
+
+/**
+ * 会议CDR操作类
+ * 
+ * @author zhipeng.xu
+ *
+ */
+@Service
+public class ConfCdrServiceImpl implements IConfCdrService{
+	@Autowired
+	private IConferenceService conferenceService;
+	@Autowired
+	private IExcelService excelService;
+	@Autowired
+	private IConfCDRManagerService confCdrManager;
+
+	@Autowired
+	private PartyDao partyDao;
+
+	@Value("${confCDR_confEndTime_delayTime}")
+	private String aheadTime;
+
+	private static Logger logger = LoggerFactory.getLogger(ConfCdrServiceImpl.class);
+
+	/**
+	 * 获取会后报告文件
+	 * 
+	 * @param conferenceWaitMake
+	 * @return
+	 */
+	public boolean getReportData(ConferenceWaitMake conferenceWaitMake){
+		if(null == conferenceWaitMake) {
+			logger.error("getReportData error   -- byConferenceWaitMake is null");
+			return false;
+		}
+		ConferenceInfo conf = new ConferenceInfo();
+		boolean flag = true;
+		// 获取此调度相关的会议信息
+		Long confId = conferenceWaitMake.getId().getConferenceId();
+		try{
+			if(null == confId) {
+				logger.error("confId is null");
+				return false;
+			}else{
+				conf = conferenceService.getConfInfoById(confId.toString());
+			}
+			if(null != confId) {
+				Short ifmake = conferenceWaitMake.getIfMake();
+				if(ifmake == 1) {
+					logger.info("会后报告任务已经完成");
+					return true;
+				}
+				// 会后报告处理过程之计费数据采集
+				flag = confReportData_collectData(conf, conferenceWaitMake);
+			}
+		}catch (Exception e){
+			logger.error("getReportData error", e);
+			return false;
+		}
+		return flag;
+	}
+
+	private boolean confReportData_collectData(ConferenceInfo conf, ConferenceWaitMake conferenceWaitMake) throws SQLException{
+		if(conf == null) {
+			logger.error("confReportData_collectData -conf is null");
+		}
+		if(null == conferenceWaitMake) {
+			logger.error("confReportData_collectData -conferenceWaitMake is null");
+			return false;
+		}
+		try{
+			logger.info("开始执行会后报告调度的获取CDR数据入主动服务库任务+billincode=" + conf.getConfBillingcode());
+			// 会后报告调度的获取会议CDR数据入主动服务任务处理；
+			List<ConfDetailCDR> confDetailCDRList = getConfCDRToDeal(conf, conferenceWaitMake);
+			if(null != confDetailCDRList && confDetailCDRList.size() > 0) {
+				logger.info("完成执行会后报告调度的获取CDR数据入主动服务库任务,billincode=" + conf.getConfBillingcode() + "StartTime=" + conf.getBeginTime());
+				ConfDetailCDR confDetailCDR = confDetailCDRList.get(0);
+				if(null != confDetailCDR && null != confDetailCDR.getFlag() && confDetailCDR.getFlag() == 0) {
+					// 通过计费接口未获取到任何满足条件的会议，这种情况多为会中无任何与会者记录，所以计费找不到会
+					return false;
+				}
+				logger.info("开始生成excel 会后报告文件");
+				// 生成会后报告文件
+				excelService.writeExcelReport(confDetailCDRList);
+			}else{
+				logger.info("获取会议CDR失败; billingcode=" + conf.getConfBillingcode());
+				return false;
+			}
+		}catch (Exception e){
+			logger.error("生成excel 会后报告文件失败!billincode=" + conf.getConfBillingcode() + ",StartTime=" + conf.getBeginTime(), e);
+			return false;
+		}
+		return true;
+	}
+
+	public List<ConfDetailCDR> getConfCDRToDeal(ConferenceInfo conf, ConferenceWaitMake conferenceWaitMake){
+		SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd");
+		SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+		if(conf == null || conferenceWaitMake == null) {
+			logger.info("conf or conferenceWaitMake is null !");
+			return null;
+		}
+		Calendar c1 = Calendar.getInstance();
+		Calendar c2 = Calendar.getInstance();
+		String startTime = conf.getBeginTime().toString();
+		//String endTime = conf.getEndTime().toString();
+		// 将会议报告任务生成的时间，作为会议真正的结束时间
+		String endTime = conferenceWaitMake.getCreateTime().toString();
+		HashMap<String, ConfCDR> confMap = new HashMap<String, ConfCDR>();
+		try{
+			c1.setTime(sdf.parse(startTime));
+			c2.setTime(sdf.parse(endTime));
+			int m = c2.get(Calendar.MONTH) - c1.get(Calendar.MONTH);
+			if(m == 0) {
+				// =0说明startTime和endTime月份相同；
+				confMap = getConfCDR(conf.getConfBillingcode(), startTime, endTime);// 通过计费接口获取会议细信息
+			}else{
+				// 说明startTime和endTime月份不相同；
+				String _endTime = df.format(DateFormatUtil.getLastDay(startTime)); // 获取开始时间所在月份的最后一天
+				confMap = getConfCDR(conf.getConfBillingcode(), startTime, _endTime);// 通过计费接口获取会议细信息
+				String _startTime = startTime;
+				HashMap<String, ConfCDR> _confMap = new HashMap<String, ConfCDR>();
+				_confMap = getConfCDR(conf.getConfBillingcode(), _startTime, endTime);// 通过计费接口获取会议细信息
+				if(null == confMap) {
+					confMap = new HashMap<String, ConfCDR>();
+				}
+				if(null != _confMap && _confMap.size() > 0) {
+					for(String msrecordid : _confMap.keySet()){
+						confMap.put(msrecordid, _confMap.get(msrecordid));
+					}
+				}
+			}
+		}catch (ParseException e1){
+			logger.error("getConfCDRToDeal--MONTH parse  is error!", e1);
+		}
+		List<ConfDetailCDR> confDetailCDRList = new ArrayList<ConfDetailCDR>();
+		if(null == confMap || confMap.size() == 0) {
+			// confMap为空，说明无任何会议，直接返回List<ConfDetailCDR>
+			// 中flag=0,为了以接下来与有会议但无会议记录区分处理
+			short flag = 0;
+			ConfDetailCDR confDetailCDR = new ConfDetailCDR();
+			confDetailCDR.setFlag(flag);
+			confDetailCDRList.add(confDetailCDR);
+			logger.info("confMap is null,无任何会议;billingcode=" + conf.getConfBillingcode());
+			return null;
+		}
+		try{
+			for(String msRecordId : confMap.keySet()){
+				ConfCDR confCDR = confMap.get(msRecordId);
+				if(confCDR == null) {
+					continue;
+				}
+				// String info = confCDR.getInfo();
+				// 1：result非空 会议已结束并有记录 ;
+				// 0：result为{} 会议已结束无会议记录;
+				// -1：result为{} 会议未结束
+				// -2：result为{} 无任何会议
+				// -3：result为{} 会议结束是采集有问题
+				// -4：result为{} 会议结束采集中
+				String status = confCDR.getStatus();
+				if(null == status || "".equals(status)) {
+					// 0：会议已结束无会议记录， -2无任何会议 ，直接下一场
+					logger.error("getConfCDRToDeal-会议无记录，billingcode=" + conf.getConfBillingcode() + ",startTime=" + startTime + ",endTime=" + endTime + ",status=" + status
+							+ ",msRecordId" + msRecordId);
+					continue;
+				}
+				if(Consts.CONFCDR_STATUS_NOEND.equals(status) || Consts.CONFCDR_STATUS_END_GETERR.equals(status) || Consts.CONFCDR_STATUS_END_GETING.equals(status)) {
+					// -1:会议未结束 -3:会议结束是采集有问题 -4:会议结束采集中 直接清空退出，标记采集失败
+					logger.error("getConfCDRToDeal-计费在采集中，稍候再获取，billingcode=" + conf.getConfBillingcode() + ",startTime=" + startTime + ",endTime=" + endTime + ",status=" + status
+							+ ",msRecordId=" + msRecordId);
+					confDetailCDRList.clear();
+					break;
+				}
+				// 走到这里会议一定是1：非空 会议已结束并有记录 目前主动服务 不关心 城市信息 先屏蔽掉
+				/*
+				 * if(null == info || "".equals(info.trim()) ||
+				 * info.equals(Consts.CONFCDR_INFO_CITY_NO)) { //
+				 * 城市接入号等信息未完全，直接清空退出，标记采集失败
+				 * logger.error("getConfCDRToDeal-城市信息未完全，billingcode=" +
+				 * conf.getConfBillingcode() + ",startTime=" + startTime +
+				 * ",endTime=" + endTime + ",status=" + status + ",msRecordId="
+				 * + msRecordId); confDetailCDRList.clear(); break; }
+				 */
+				// 1：非空 会议已结束并有记录 ;城市接入号等信息完全,开始采集
+				List<ConfDetailCDR> pre_confDetailCDRList = new ArrayList<ConfDetailCDR>();
+				// 通过计费接口获取会议明细信息
+				pre_confDetailCDRList = getConfDetailCDR(confCDR, conf.getConfId());
+				if(null == pre_confDetailCDRList || pre_confDetailCDRList.size() == 0) {
+					// 所取到的confCDR中没有主动服务电话会议记录；
+					continue;
+				}
+				confDetailCDRList.addAll(pre_confDetailCDRList);
+			}
+		}catch (Exception e){
+			logger.info("getConfCDRToDeal-获取cdr文件失败billingcode=" + conf.getConfBillingcode() + "startTime=" + startTime + "endTime" + endTime, e);
+			return null;
+		}
+		return confDetailCDRList;
+	}
+
+	/**
+	 * 获取指定会议confCDR的会议明细记录
+	 * 
+	 * @param ConfCDR
+	 *            会议
+	 * @param confId
+	 *            会议id
+	 * @return List<ConfDetailCDR>
+	 */
+	public List<ConfDetailCDR> getConfDetailCDR(ConfCDR confCDR, Long confId){
+		if(null == confCDR || confCDR.getBillingCode() == null || "".equals(confCDR.getBillingCode().trim()) || null == confCDR.getRecordId()
+				|| "".equals(confCDR.getRecordId().trim()) || null == confId) {
+			return null;
+		}
+		JSONObject response = null;
+		List<ConfDetailCDR> confDetailCDRList = new ArrayList<ConfDetailCDR>();
+		String billingcode = confCDR.getBillingCode();
+		String msgRecordId = confCDR.getRecordId();
+		String platFormId = confCDR.getPlatFormId();
+		String startTime = confCDR.getMsgStartTime();
+		String endTime = confCDR.getMsgEndtime();
+		// 定义ConfDetailInput参数
+		ConfDetailInput confDetailInput = new ConfDetailInput();
+		GetConfDetailInput getConfDetailInput = new GetConfDetailInput();
+		getConfDetailInput.setMsgRecordId(msgRecordId);
+		getConfDetailInput.setPlatFormId(platFormId);
+		getConfDetailInput.setStartTime(startTime);
+		getConfDetailInput.setEndTime(endTime);
+		confDetailInput.setInput(getConfDetailInput);
+		try{
+			SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+			response = confCdrManager.getConfDetail(confDetailInput);
+			if(null == response || "0".equals(response.getString("isOk"))) {
+				logger.info("response is null 或 isOk =0, billingcode=" + billingcode);
+				return null;
+			}
+			JSONObject result = response.getJSONObject("result");
+			// isOk 1：成功，0：失败；
+			if(null == result) {
+				logger.info("result is null");
+				return null;
+			}
+			JSONArray confDetailList = result.getJSONArray("confDetailList");
+			if(null == confDetailCDRList || confDetailList.length() == 0) {
+				logger.info("confDetailList is null;billingcode=" + billingcode);
+				return null;
+			}
+			for(int j = 0; j < confDetailList.length(); j++){
+				JSONObject confdetailcdrobject = (JSONObject) confDetailList.get(j);
+				if(null == confdetailcdrobject) {
+					logger.info("getConfDetailCDR-result-confdetaillist-confdetailcdrobject is null,billingcode=" + billingcode);
+					continue;
+				}
+				ConfDetailCDR confDetailCDR = new ConfDetailCDR();
+				confDetailCDR.setConferenceid(confId);
+				confDetailCDR.setBillingcode(billingcode);
+				String clientCode = confdetailcdrobject.optString("clientCode");
+				if(null != clientCode && !"".equals(clientCode.trim())) {
+					clientCode = clientCode.replaceAll(" ", "");
+					confDetailCDR.setClientcode(clientCode);
+					List<PartyInfo> partyList = partyDao.getInfoByPhoneAndConfId(confId, clientCode);
+					// 姓名
+					for(PartyInfo party : partyList){
+						if(null != party.getPartyName() && !"".equals(party.getPartyName())) {
+							confDetailCDR.setBindtel(party.getPartyName().trim());
+						}
+					}
+				}
+				// String bindTel = confdetailcdrobject.optString("bindTel");
+
+				String role = confdetailcdrobject.optString("role");
+				if(null != role && !"".equals(role.trim())) {
+					if(role.trim().equals("主持人")) {
+						confDetailCDR.setRole("咨询客户");
+					}else{
+						confDetailCDR.setRole("顾问");
+					}
+				}
+				if(null != startTime && !"".equals(startTime.trim())) {
+					confDetailCDR.setMsgstarttime(sdf.parse(startTime.trim()));
+				}
+				if(null != endTime && !"".equals(endTime.trim())) {
+					confDetailCDR.setMsgendtime(sdf.parse(endTime.trim()));
+				}
+				String offlineTime = confdetailcdrobject.optString("offlineTime");
+				if(null != offlineTime && !"".equals(offlineTime.trim())) {
+					confDetailCDR.setOfflinetime(sdf.parse(offlineTime.trim()));
+				}
+				String onlineTime = confdetailcdrobject.optString("onlineTime");
+				if(null != onlineTime && !"".equals(onlineTime.trim())) {
+					confDetailCDR.setOnlinetime(sdf.parse(onlineTime.trim()));
+				}
+				if(null != platFormId && !"".equals(platFormId.trim())) {
+					confDetailCDR.setPlatformid(platFormId.trim());
+				}
+				String accessnumber = confdetailcdrobject.optString("accessnumber");
+				if(null != accessnumber && !"".equals(accessnumber.trim())) {
+					confDetailCDR.setAccessnumber(accessnumber.trim());
+				}
+				String subtel = confdetailcdrobject.optString("subtel");
+				if(null != subtel && !"".equals(subtel.trim())) {
+					confDetailCDR.setSubtel(subtel.trim());
+				}
+				confDetailCDR.setRecordid(msgRecordId);
+				if(confDetailCDR != null) {
+					confDetailCDRList.add(confDetailCDR);
+				}
+			}
+		}catch (Exception e){
+			JSONObject confDetailInputJson = null;
+			try{
+				confDetailInputJson = JSONUtil.objectToJson(confDetailInput);
+			}catch (Exception e2){
+			}
+			logger.error("getConfDetailCDR->从获取失败,参数confDetailInput=" + confDetailInputJson, e);
+		}
+		return confDetailCDRList;
+	}
+
+	public HashMap<String, ConfCDR> getConfCDR(String billingcode, String startTime, String endTime){
+		if(null == billingcode || "".equals(billingcode.trim())) {
+			logger.error("getConfCDR billingcode is null");
+			return null;
+		}
+		if(null == startTime || "".equals(startTime.trim())) {
+			logger.error("getConfCDR startTime is null,billingcode=" + billingcode);
+			return null;
+		}
+		if(null == endTime || "".equals(endTime.trim())) {
+			logger.error("getConfCDR endTime is null,billingcode=" + billingcode);
+			return null;
+		}
+		ConfInput confInput = new ConfInput();
+
+		startTime = DateFormatUtil.dateTimeAddMinute(startTime, -60);
+
+		endTime = DateFormatUtil.dateTimeAddMinute(endTime, 600);
+		GetConfInput getConfInput = new GetConfInput(billingcode, startTime, endTime);
+		confInput.setInput(getConfInput);
+		JSONObject response = null;
+		HashMap<String, ConfCDR> confMap = new HashMap<String, ConfCDR>();
+		try{
+			response = confCdrManager.getConfList(confInput);
+			if(null == response || "0".equals(response.getString("isOk"))) {
+				logger.info("result is null 或 isOk =0, billingcode=" + billingcode);
+				return null;
+			}
+			// result计费接口返回的JSON中的字段；
+			JSONObject result = response.getJSONObject("result");
+			if(null == result) {
+				logger.info("result is null,billingcode=" + billingcode);
+				return null;
+			}
+			// conflist计费接口返回的JSON中的字段；
+			JSONArray conflist = result.getJSONArray("conflist");
+			if(null == conflist || conflist.length() == 0) {
+				logger.info("conflist is null,billingcode=" + billingcode);
+				return null;
+			}
+			SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+			// 将会议结束时间恢复到之前分钟数，为了能取到CDR中最符合条件的会；
+			String confEndDelayTime = aheadTime;
+			if(null == confEndDelayTime || "".equals(confEndDelayTime)) {
+				confEndDelayTime = "10";
+			}
+			for(int i = 0; i < conflist.length(); i++){
+				JSONObject confcdrobject = (JSONObject) conflist.get(i);
+				if(null == confcdrobject || null == confcdrobject.getString("status") || "".equals(confcdrobject.getString("status"))
+						|| "-2".equals(confcdrobject.getString("status"))) {
+					logger.info("getConfCDR->confcdrobject is null or status = -2 no conference ;billingcode=" + billingcode);
+					continue;
+				}
+				// 1：result非空 会议已结束并有记录 ;
+				// 0：result为{} 会议已结束无会议记录;
+				// -1：result为{} 会议未结束
+				// -2：result为{} 无任何会议
+				// -3：result为{} 会议结束是采集有问题
+				// -4：result为{} 会议结束采集中
+				// 只获取SUMMIT平台的会议记录
+				if(confcdrobject.getString("platFormId").indexOf("summit") != -1) {
+					ConfCDR confCDR = (ConfCDR) JSONUtil.JSONToObj(confcdrobject.toString(), ConfCDR.class);
+					// confCDRList.add(confCDR);
+					if(null != confCDR && null != confCDR.getRecordId() && !"".equals(confCDR.getRecordId())) {
+						String msgStartTime = confCDR.getMsgStartTime();
+						String msgEndtime = confCDR.getMsgEndtime();
+						String statusString = confCDR.getStatus();
+						if(null != statusString && "-1".equals(statusString) && "".equals(msgEndtime) && msgStartTime != null && !"".equals(msgStartTime.trim())) {
+							msgEndtime = msgStartTime;
+						}
+						if(null != msgStartTime && !"".equals(msgStartTime.trim()) && null != msgEndtime && !"".equals(msgEndtime.trim())) {
+							// 会议开始时间
+							Date confBeginDate = df.parse(msgStartTime);
+							// 会议结束时间
+							Date confEndDate = df.parse(msgEndtime);
+							// 需求时间段开始时间
+							Date startTimeDate = df.parse(startTime);
+							// 需求时间段的结束时间
+							Date endTimedDate = df.parse(endTime);
+							// 会议结束了，将判断符合时间段需求的会添加到confMap中
+							if(confBeginDate.before(endTimedDate) && confEndDate.after(startTimeDate)) {
+								confMap.put(confCDR.getRecordId(), confCDR);
+							}
+						}
+					}
+				}
+			}
+		}catch (Exception e){
+			JSONObject confinputjJson = null;
+			try{
+				confinputjJson = JSONUtil.objectToJson(confInput);
+			}catch (Exception e2){
+			}
+			logger.error("getConfCDR->从计费接口获取会议失败,参数confInput=" + confinputjJson, e);
+		}
+		return confMap;
+	}
+}

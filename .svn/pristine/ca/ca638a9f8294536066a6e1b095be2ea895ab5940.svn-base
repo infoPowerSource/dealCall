@@ -1,0 +1,123 @@
+@CHARSET
+UTF-8;
+.user-info
+{
+text-align:right;
+}
+#callForm2 {
+	padding-top: 5px;
+}
+
+#callForm2 p {
+	display: inline-block;
+}
+
+#callForm2 .td-input-block {
+	display: inline-block;
+	margin-left: 10px;
+}
+
+#callForm2 #phoneCall2 {
+	height: 25px;
+	line-height: 25px;
+	width: 45px;
+	cursor: pointer;
+}
+
+#callForm2 #phoneNum2 {
+	height: 25px;
+	line-height: 25px;
+}
+
+#callForm7 {
+	padding-top: 5px;
+}
+
+#callForm7 p {
+	display: inline-block;
+}
+
+#callForm7 .td-input-block {
+	display: inline-block;
+	margin-left: 10px;
+}
+
+#callForm7 #phoneCall7 {
+	height: 25px;
+	line-height: 25px;
+	width: 45px;
+	cursor: pointer;
+}
+
+#callForm7 #phoneNum7 {
+	height: 25px;
+	line-height: 25px;
+}
+
+.top-tip {
+	position: absolute;
+	top: 0px;
+	height: 40px;
+	z-index: 999999999;
+	width: 100%;
+	text-align: center
+}
+
+.top-tip .tip-text {
+	display: inline-block;
+	width: 400px;
+	height: 40px;
+	line-height: 40px;
+	background: white;
+	box-shadow: 2px 2px 2px 2px grey;
+	border-radius: 5px
+}
+
+.top-tip .tip-text button {
+	margin-left: 5px;
+	height: 30px;
+	line-height: 25px;
+	width: 80px
+}
+
+.text_with_input { 
+    width: 110px; 
+    display:inline-block;
+} 
+
+.text_with_input input { 
+    border: none; 
+    text-align: center; 
+    outline:none; 
+    width:30px;
+} 
+.task-info .drop-list-box.service{
+	width:100px;
+}
+
+.pub-table.iframe td:first-child {
+    padding-left: 10px !important;
+}
+
+.drop-list-box.countrycode {
+	width: 50px ;
+}
+.drop-list-box.countrycode .select-menu:focus {
+	background-position: 70px ;
+}
+.drop-list-box.countrycode .code_list {
+    display: none;
+    border: 1px solid #caced3;
+    z-index: 5;
+    padding: 5px 5px 5px 10px;
+    font-size: inherit;
+    border-radius: 2px;
+    background-color: #fff;
+    width: 270% !important;
+    left: 0 !important;
+    position: absolute;
+    top: 30px;
+    height: 110px !important;
+    overflow-y: auto !important;
+	cursor: pointer;
+}

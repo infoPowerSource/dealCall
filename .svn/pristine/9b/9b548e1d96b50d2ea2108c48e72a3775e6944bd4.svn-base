@@ -1,0 +1,33 @@
+.er-coder {
+    width: 100px;
+    height: 40px;
+    background-color: #90c95a;
+    color: #fff;
+    font-size: 14px; // line-height: 1;
+    text-align: center;
+    line-height: 40px;
+    display: inline-block;
+    letter-spacing: 5px;
+    right: 0;
+    bottom: 1px;
+    cursor: pointer;
+}
+.pwd{
+    color: #666;
+}
+.pwd:hover{
+    color: #333;
+}
+.Rectangle-9 {
+    width: 380px;
+    height: 220px;
+    border-radius: 2px;
+    background-color: #ffffff;
+    color: #4a4a4a;
+    box-shadow: 0 2px 6px 0 rgba(0, 0, 0, 0.2);
+    border: solid 1px #e7e7e8;
+}
+body .Rectangle-9 .layui-layer-title{}
+body .Rectangle-9 .layui-layer-content{height: initial !important;min-height: 100px;padding-left: 43px;padding-right: 43px;}
+body .Rectangle-9 .layui-layer-setwin{right: 8px;top: 8px;}
+body .Rectangle-9 .layui-layer-btn a{width: 120px;height: 40px;margin:0px;padding:8px 28px;color: #4a4a4a;background-color: #e7e7e8;border:none;font-size: 16px;}

@@ -1,0 +1,898 @@
+package com.deal.monitor.handler.impl;
+
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
+
+import javax.servlet.http.HttpServletRequest;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.util.ObjectUtils;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+
+import Ice.StringHolder;
+import edu.emory.mathcs.backport.java.util.concurrent.TimeUnit;
+
+import com.deal.dao.create.ConferenceDao;
+import com.deal.dao.create.CustomerDao;
+import com.deal.dao.support.SupportDao;
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.entity.create.ConferenceSupportTaskInfo;
+import com.deal.entity.create.CustomerInfo;
+import com.deal.entity.party.CacheParty;
+import com.deal.entity.party.CahcheConference;
+import com.deal.entity.support.SupportInfo;
+import com.deal.monitor.cache.CacheConferenceManage;
+import com.deal.monitor.cache.RedisService;
+import com.deal.monitor.handler.IConfMonitorService;
+import com.deal.service.acm.IACMService;
+import com.deal.service.create.impl.IConferenceHandleService;
+import com.deal.util.Consts;
+import com.deal.util.DateFormatUtil;
+import com.deal.util.PingYin4j;
+import com.deal.util.StringUtils;
+import com.gnet.acmw.client.DialoutParty;
+import com.gnet.acmw.client.DialoutPhoneNumber;
+import com.gnet.acmw.client.IConfMgm;
+import com.gnet.acmw.client.IConference;
+import com.gnet.acmw.client.IParty;
+import com.gnet.acmw.client.impl.AcmClientImp;
+import com.gnet.acmw.client.impl.Conference;
+import com.google.common.collect.Lists;
+
+/**
+ * 会议监控端初始化
+ * 
+ * @author zhipeng.xu
+ * @date 2017.05.16
+ */
+@Service
+public class ConferenceMonitorImpl implements IConfMonitorService{
+	public static final Logger logger = LoggerFactory.getLogger(ConferenceMonitorImpl.class);
+	/** 取得会议管理对象 **/
+	private IConfMgm confMgm;
+
+	@Autowired
+	private ConferenceDao confDao;
+	@Autowired
+	private CustomerDao custDao;
+	@Autowired
+	private SupportDao supportDao;
+	@Autowired
+	private IACMService acmService;
+	@Autowired
+	private IConferenceHandleService  confHandler;
+
+	public ConferenceMonitorImpl() {
+		confMgm = AcmClientImp.getInstance().getConfMgm();
+	}
+
+	/**
+	 * 负责多线程获取从消息队列中的BC，将会议信息存放到缓存中
+	 * 
+	 * @author zhipeng.xu
+	 * @param billingCode
+	 */
+	public void confMonitorPushCache(String billingCode){
+		logger.info("confMonitorPushCache start bc " + billingCode);
+		try{
+			IConference conference;
+			// 会议未订阅, 订阅会议
+			if(!confMgm.isConfSubscribed(billingCode)){
+				int subscribeResult = confMgm.subscribeConf(billingCode);
+				// 记录失败日志, 返回订阅失败消息-1, -2, -11返回8061
+				if(subscribeResult != 0){
+					logger.error("会议订阅失败，会议BC：" + billingCode + " 异常码 " + subscribeResult);
+					return;
+				}
+			}
+			conference = confMgm.getConference(billingCode);
+			if(conference != null){
+				CacheConferenceManage.pushCacheConference(billingCode, conference);
+				logger.info("会议被订阅，会议信息存放缓中" + billingCode);
+			}else{
+				logger.error("会议信息为空，会议BC：" + billingCode);
+			}
+		}catch (Exception e){
+			logger.error("会议开始缓存存放失败，会议BC:" + billingCode + e.toString());
+			e.printStackTrace();
+		}
+		logger.info("confMonitorPushCache end bc " + billingCode);
+	}
+
+	/**
+	 * 会议外呼 对外的统一接口 ，外呼专家
+	 * 
+	 * @param2、有咨询客户入会，外呼专家
+	 * @param3、所有咨询客户入会
+	 * @param4、有一个咨询客户如何，客服和客户沟通
+	 * @author zhipeng.xu
+	 * @param billingCode
+	 */
+	public String confMonitorHandle(String billingCode){
+		logger.info("confMonitorHandle billingCode " + billingCode);
+		// 定义返回的真实咨询客户的姓名，用于会后报告的显示
+		String realName = "";
+		if(!isSubscribeAndActiveConf(billingCode)){
+			return realName;
+		}
+		try{
+			// 根据billingcode查询会议Id和会议类型
+			ConferenceInfo resultConf = confDao.getConfByBillingCode(billingCode);
+			if(null != resultConf){
+				Integer confType = resultConf.getConfConfig();
+				Long confId = resultConf.getConfId();
+				logger.info("外呼的会议，confId is " + confId + " and confType is " + confType);
+				// 取得会议实体
+				Conference conference = (Conference) confMgm.getConference(billingCode);
+				List<IParty> partyList = Lists.newArrayList();
+				// 获取会议的参会人信息
+				partyList = conference.getPartyList();
+				if(partyList.size() == 0){
+					logger.error("本场会议客户数量 0, bc:" + conference.getBillingCode());
+					return realName;
+				}
+				logger.info("本场会议客户数量:" + partyList.size() + "会议bc:" + conference.getBillingCode());
+				int totalCustomer = 0; // 记录咨询客户通讯录中的数量
+				int customerIndex = 0; // 对比咨询客户和缓存中的数量
+				for(IParty party : partyList){
+					if(party.getRole() == Consts.IS_HOST){
+						String phone = party.getPhoneNumber().getPhoneNationalNumber();
+						String country = party.getPhoneNumber().getPhoneCountryCode();
+						String areaCode = party.getPhoneNumber().getPhoneAreaCode();
+						String queryPhone ="";
+						if(country.equals("86")){
+							queryPhone = StringUtils.isMobileNO(phone) ? phone : phone.substring(party.getPhoneNumber().getPhoneAreaCode().length() + 1, phone.length());
+							areaCode = "0" + party.getPhoneNumber().getPhoneAreaCode();
+						}else{
+							queryPhone = phone;
+						}
+						CustomerInfo host = custDao.getHostInfo(queryPhone, Consts.IS_HOST, confId);
+						if(ObjectUtils.isEmpty(host)){
+							CustomerInfo customer = new CustomerInfo();
+							ConferenceInfo confInfo = new ConferenceInfo();
+							confInfo.setConfId(Long.valueOf(confId));
+							customer.setCustAreacode(areaCode);
+							customer.setCustContryCode(country);
+							customer.setCustName(queryPhone);
+							customer.setCustTel(queryPhone);
+							customer.setCustType(party.getRole());
+							// 由于主动接入没有邮箱
+							customer.setCustEmail("");
+							customer.setConfInfo(confInfo);
+							custDao.saveForMonit(customer);
+							realName = queryPhone;
+						}else{
+							realName = host.getCustName();
+						}
+						customerIndex++;
+					}
+				}
+				List<CustomerInfo> hostParty = Lists.newArrayList();
+				hostParty = custDao.getCustInfoForMonit(confId, Consts.IS_HOST);
+				totalCustomer = hostParty.size();
+				logger.info("会议BC:" + billingCode + "中有" + customerIndex + "个咨询客户！");
+				// 将会议中的专家 组装进acm的party信息中
+				List<DialoutParty> listDp = callExpertByACM(confId);
+				List<ConferenceSupportTaskInfo> taskList = Lists.newArrayList();
+				taskList = supportDao.getSupportOut(confId, Consts.CONF_TYPE_BUSINESS);
+				
+				// 只要有咨询客户入会，生成交易型任务
+				if(confType == Consts.MEETING_CONFIG_DEAL && customerIndex == 1){
+					logger.info("deal task is starting confId is " + confId);
+					ConferenceSupportTaskInfo conferenceTaskInfo = new ConferenceSupportTaskInfo();
+					// 生成交易型任务
+					Timestamp now = new Timestamp(System.currentTimeMillis());
+					conferenceTaskInfo.setConfID(Long.valueOf(confId));
+					conferenceTaskInfo.setConfType(Consts.CONF_TYPE_BUSINESS);
+					conferenceTaskInfo.setCreateTime(now);
+					conferenceTaskInfo.setStatus(0);
+					if(taskList.size() == 0){
+						logger.info("咨询客户入会，生成交易型任务");
+						supportDao.save(conferenceTaskInfo);
+					}else{
+						logger.info("咨询客户入会，交易型任务已经存在，不在生成");
+					}
+					logger.info("deal task is end confId is " + confId);
+				}
+			}
+			logger.info("confMonitorHandle billingCode " + billingCode + " end");
+		}catch (Exception e){
+			logger.error("处理会议开始逻辑有误，会议billingCode " + billingCode + e.toString());
+			e.printStackTrace();
+		}
+		return realName;
+	}
+	
+   //呼叫专家
+	public List<DialoutParty> callExpertByACM(Long confId){
+		List<DialoutParty> listDp = Lists.newArrayList();
+		List<CustomerInfo> guestParty = Lists.newArrayList();
+		guestParty = custDao.getCustInfoForMonit(confId, Consts.IS_GUEST);
+		for(CustomerInfo cust : guestParty){
+			String name = cust.getCustName();
+			Integer role = cust.getCustType();
+			String phone = cust.getCustTel();
+			String countryCode = cust.getCustContryCode();
+			countryCode = countryCode.startsWith("+") ? countryCode.substring(1, countryCode.length()) : countryCode;
+			DialoutPhoneNumber dPn; // 外呼方法
+			if(StringUtils.isMobileNO(phone)){
+				dPn = new DialoutPhoneNumber(countryCode,null, phone, null, null);
+			}else{
+				String area = cust.getCustAreacode();
+				dPn = new DialoutPhoneNumber(countryCode, area, phone, null, null);
+			}
+			DialoutParty dp = new DialoutParty(name, dPn, role, null, null);
+			listDp.add(dp);
+		}
+		return listDp;
+	}
+
+	/**
+	 * 根据billingcode查询专家的名称
+	 * 
+	 * @author kun.bai
+	 * @param billingCode
+	 */
+	public String getGuestName(Long confId, String acmPhone){
+		logger.info("getGuestName confId =" + confId + ", Phone =" + acmPhone);
+		// 定义返回的真实咨询客户的姓名，用于会后报告的显示
+		String realName = "";
+		try{
+			// 根据会议Id 查询中数据库中专家的总数
+			List<CustomerInfo> guestParty = Lists.newArrayList();
+			guestParty = custDao.getCustInfoForMonit(confId, Consts.IS_GUEST);
+			for(CustomerInfo custInfo : guestParty){
+				if(acmPhone.endsWith(custInfo.getCustTel())){
+					return custInfo.getCustName();
+				}
+			}
+		}catch (Exception e){
+			logger.error("getGuestName有误, confId =" + confId + ", Phone =" + acmPhone + e.toString());
+			e.printStackTrace();
+		}
+		return realName;
+	}
+
+	/**
+	 * 会议时间达到预约开始时间，系统自动外呼专家的电话
+	 * 
+	 * @return 0成功 1 本场会议不存在会议Id 2 本场会议不存在专家
+	 * @param billingCode
+	 */
+	public Integer confCallOutAuto(String billingCode){
+		// 定义返回值
+		int result = 0;
+		if(!isSubscribeAndActiveConf(billingCode)){
+			return 1;
+		}
+		try{
+			logger.info("会议时间达到预约开始时间，系统自动激活会议，billingCode is " + billingCode);
+			// 根据billingcode查询会议Id和会议类型
+			ConferenceInfo resultconf = confDao.getConfByBillingCode(billingCode);
+			if(null == resultconf){
+				logger.error("这个bC的会议不存在， billingCode " + billingCode);
+				return 1;
+			}
+			Long confId = resultconf.getConfId();
+			// 根据会议id 读取此会议的专家信息(专家type为0)
+			List<CustomerInfo> listParty = Lists.newArrayList();
+			listParty = custDao.getCustInfoForMonit(confId, Consts.IS_GUEST);
+			if(listParty.size() == 0){
+				logger.error("本场会议不存在专家，billingCode " + billingCode);
+				return 2;
+			}
+			// 专家信息存在，添加到acm的DialoutParty中
+			List<DialoutParty> listDp = callExpertByACM(confId);
+			Conference conference = (Conference) confMgm.getConference(billingCode);
+			return callOutGroup(listDp, conference);
+		}catch (Exception e){
+			e.printStackTrace();
+		}
+		return result;
+	}
+
+
+	/**
+	 * 外呼
+	 * 
+	 * @author zhipeng.xu
+	 * @param dp
+	 *            acm 外呼单个参会人
+	 * @param conference
+	 *            会议handle -1 ACM发送消息超时 -2 ACM和CAS的连接中断 -3 会议桥参数错误 -11
+	 *            Client检查参数错误 -12 Client未将消息发送给ICE Server -51 Summit处理消息失败 0
+	 *            消息已经提交平台，平台将发送的Event为：ConfPropertyEvent，index=2105
+	 * @return
+	 */
+	public int callOut(String bridgeName, DialoutParty dp, IConference conference){
+		logger.info("callOut start bc：" + conference.getBillingCode() + " and phone " + dp.phoneNum);
+		int result = conference.dialout(bridgeName, dp, new StringHolder());
+		if(result != 0){
+			logger.info("conf callout partys fail!bc:" + conference.getBillingCode() + " 异常码：" + result);
+			return result;
+		}
+		// 外呼成功
+		else{
+			logger.info("conf callout partys success!bc:" + conference.getBillingCode());
+		}
+		logger.info("callOut end bc：" + conference.getBillingCode() + " and phone " + dp.phoneNum);
+		return result;
+	}
+
+
+	/**
+	 * 使用blast外呼,可以变换呼叫电话
+	 * 
+	 * @author kun.bai
+	 * 
+	 * @param dp
+	 *            acm 外呼单个参会人
+	 * @param conference
+	 *            会议handle -1 ACM发送消息超时 -2 ACM和CAS的连接中断 -3 会议桥参数错误 -11
+	 *            Client检查参数错误 -12 Client未将消息发送给ICE Server -51 Summit处理消息失败 0
+	 *            消息已经提交平台，平台将发送的Event为：ConfPropertyEvent，index=2105
+	 * @return
+	 */
+	public int blastCall(String name, DialoutPhoneNumber phone,String bridgeName, DialoutParty dp, IConference conference){
+		logger.info("callOut start bc：" + conference.getBillingCode() + " and phone " + phone.getPhone());
+
+		int result = 1;
+		String partid="";
+		int partynum = 0;
+		//将客服名称转化为acm平台的拼音
+		//String name_pinyin = getPinYin(name);
+		//根据confernce获取所有party
+		List<IParty> partyList = conference.getPartyList();
+		if(partyList != null && !partyList.isEmpty()){
+			partynum = partyList.size();
+			for(IParty party : partyList){
+				if(name.equals(party.getPartyName())){
+					//名称相同，根据名称定义到party,然后为这个party修改新的电话号码
+					partid = party.getPartyID();
+					//要切换电话前，首先把自己的电话挂断
+					if(conference.findParty(partid).getConnectState()!=0){
+						conference.hangupParty(partid);
+						conference.kickOutParty(partid);
+						for(int i = 0; i < 9; i++){
+							try{
+								TimeUnit.SECONDS.sleep(1);
+								IParty party1= conference.findParty(partid);
+								if(party1 !=null){
+									if(party1.getConnectState()==0){
+										//挂断成功，可以外呼
+										break;
+									}
+								}else{
+									//会中无人，已经结束
+									break;
+								}								
+							}catch (InterruptedException e){
+								e.printStackTrace();
+							}
+						}
+					}			
+					break;
+				}
+			}
+		}
+		
+		//重新判断会议中是否有人，外呼新号码
+		IParty party1= conference.findParty(partid);
+		if(party1 != null && partynum >1){
+			party1.changePhone(phone);
+			result = conference.blast(partid);
+		}else{
+			if(isSubscribeAndActiveConf(conference.getBillingCode())){
+				result = conference.dialout(bridgeName, dp, new StringHolder());
+			}
+		}
+		
+		if(result != 0){
+			logger.info("conf callout partys fail!bc:" + conference.getBillingCode() + " 异常码：" + result);
+			return result;
+		}
+		// 外呼成功
+		else{
+			logger.info("conf callout partys success!bc:" + conference.getBillingCode());
+		}
+		logger.info("callOut end bc：" + conference.getBillingCode() + " and phone " + phone.getPhone());
+		return result;
+	}
+
+	/**
+	 * 外呼多个参会人
+	 * 
+	 * @param listDp
+	 * @param conference
+	 * @return
+	 */
+	public int callOutGroup(List<DialoutParty> listDp, IConference conference){
+		logger.info("callOutGroup start party size：" + listDp.size());
+		int result = conference.dialout(listDp);
+		// 外呼存在异常
+		if(result != 0){
+			logger.info("conf callout partys fail!bc:" + conference.getBillingCode() + "异常码 " + result);
+			return result;
+		}
+		// 外呼成功
+		else{
+			logger.info("conf callout partys success!bc:" + conference.getBillingCode());
+		}
+		logger.info("callOutGroup end party size：" + listDp.size());
+		return result;
+	}
+
+	/**
+	 * 客服自动外呼-异步
+	 */
+	public int callOutOpAuto(SupportInfo supportConf){
+		// 主持人
+		int result = 0;
+		Integer role = 1;
+		String phone = supportConf.getSupportTel();
+		String billingCode = supportConf.getMeetmeBillingcode();
+		String lnternalLine = null;
+		if(!isSubscribeAndActiveConf(billingCode)){
+			return 1;
+		}
+		if(phone.startsWith("2#")){
+			phone = phone.substring(2, phone.length());
+			lnternalLine = "2#";
+		}
+		DialoutPhoneNumber dPn = new DialoutPhoneNumber(phone, lnternalLine);
+		DialoutParty dp = new DialoutParty(supportConf.getSupportName(), dPn, role, null, null);
+		// 取得会议实体
+		IConference conference = (Conference) confMgm.getConference(billingCode);
+		return callOut(supportConf.getBridgeName(), dp, conference);
+	}
+
+	 /** 
+	 * 得到中文的拼音（不超过30个字符） 
+	 *  
+	 * @param String name 
+	 */ 
+	private String getPinYin(String name){ 
+		//传过来的中文名字	
+		if (name != null) {	
+			//转换中文名称,将汉语的会议名称转换为汉语拼音，长度不能超过30 
+			name = PingYin4j.getFullSpell(name); 
+			if(name != null) { 
+				int nameLength = name.length(); 
+				if(nameLength > 30) { 
+					name = name.substring(0, 30); 
+				} 
+			}	
+		}	
+		return name; 
+	}
+	
+	/**
+	 * 客服外呼自己
+	 */
+	public int callOutForOp(String billingCode){
+		// 定义返回结果
+		// 错误为1，成功为0
+		int result = 1;
+		logger.info("callOutForOp start");
+		if(!isSubscribeAndActiveConf(billingCode)){
+			return 1;
+		}
+		// 从session中拿到 客服登录的实体信息
+		ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+		HttpServletRequest request = attributes.getRequest();
+		SupportInfo support = (SupportInfo) request.getSession().getAttribute("supportInfo");
+		if(support == null){
+			logger.error("session中用户信息不存在");
+			return result;
+		}
+		// 从session中获取客服的信息
+		String phone = support.getSupportTel();
+		String name = support.getSupportName();
+		String bridge = support.getBridgeName();
+		// 主持人
+		Integer role = 1;
+		// 判断是否用内线外呼
+		String lnternalLine = null;
+		if(phone.startsWith("2#")){
+			phone = phone.substring(2, phone.length());
+			lnternalLine = "2#";
+		}
+		DialoutPhoneNumber dPn = new DialoutPhoneNumber(phone, lnternalLine);
+		DialoutParty dp = new DialoutParty(name, dPn, role, null, null);
+		IConference conference = (Conference) confMgm.getConference(billingCode);
+		result = blastCall(name, dPn,bridge,dp, conference);
+		logger.info("callOutForOp end");
+		return result;
+	}
+
+	/**
+	 * 根据bc 和 partyid 查询参会人信息
+	 * 
+	 * @param billingCode
+	 * @param partyId
+	 * @return
+	 */
+	public IParty findPartyById(String billingCode, String partyId){
+		// 取得会议实体
+		Conference conference = (Conference) confMgm.getConference(billingCode);
+		// 如果会议已经结束
+		if(conference == null){
+			return null;
+		}
+		return conference.findParty(partyId);
+	}
+
+	/**
+	 * 客服退出，挂断及时会议
+	 * 
+	 * @param billingcode
+	 *            会议billingCode
+	 */
+	public int hangUpForOp(String billingCode){
+		logger.info("close conference start billingCode " + billingCode);
+		int result = 1;
+		// 取得会议实体
+		Conference conference = (Conference) confMgm.getConference(billingCode);
+		if(conference == null){
+			logger.error("此会议不存在，会议bc " + billingCode);
+			return result;
+		}
+		result = conference.close();
+		if(result != 0){
+			logger.error("结束会议失败 billingCode " + billingCode + " 异常码：" + result);
+			return result;
+		}
+		logger.info("close conference end billingCode " + billingCode);
+		return result;
+	}
+
+	/**
+	 * 外呼入口
+	 * 
+	 * @param summit
+	 *            平台
+	 * @param billingCode
+	 *            会议bc
+	 * @param partyList
+	 *            参会人 集合
+	 * @return
+	 */
+	public boolean control_callout(String summit, String billingCode, List<CustomerInfo> partyList){
+		// 会议开始时有可能会议在一台服务器上被激活和订阅，而用户请求外呼是在另外一台，此时服务器没有订阅，有可能外呼失败
+		// 会议未订阅, 订阅会议
+		logger.info("客服界面外呼专家开始，会议BC:" + billingCode);
+		int result = 0;
+		if(!isSubscribeAndActiveConf(billingCode)){
+			return false;
+		}
+		Conference conference = (Conference) confMgm.getConference(billingCode);
+		List<DialoutParty> listDp = Lists.newArrayList();
+		for(CustomerInfo party : partyList){
+			DialoutPhoneNumber dPn;
+			String phone = party.getCustTel();
+			String countryCode = party.getCustContryCode();
+			countryCode = countryCode.startsWith("+") ? countryCode.substring(1, countryCode.length()) : countryCode;
+			if(StringUtils.isMobileNO(phone)){
+				dPn = new DialoutPhoneNumber(countryCode, null, phone, null, null);
+			}else{
+				String area = party.getCustAreacode();
+				dPn = new DialoutPhoneNumber(countryCode, area, phone, null, null);
+			}
+			DialoutParty dp = new DialoutParty(party.getCustName(), dPn, party.getCustType(), null, null);
+			listDp.add(dp);
+		}
+		result = callOutGroup(listDp, conference);
+		return result == 0;
+	}
+
+	/**
+	 * 转移咨询客户信息
+	 * 
+	 * @param 目标会议targetBillingCode
+	 * @param 现在会议billingCode
+	 * @param 咨询客户信息
+	 */
+	public boolean transferPartyToAnotherConf(String targetBillingCode, String billingCode, CustomerInfo party){
+		logger.info("转移参会人 start time" + new Timestamp(System.currentTimeMillis())+",目标会议BC" + targetBillingCode+",会议BC" + billingCode);
+		// 根据两个billingCode 取得平台上的会议
+		if(!isSubscribeAndActiveConf(targetBillingCode)){
+			logger.error("拉入走廊时，目标会议激活失败，会议BC" + targetBillingCode);
+			logger.error("修改目标会议时间，重新激活，会议BC" + targetBillingCode);
+			//根据billingcode查询目标会议是否已经结束，如果结束，需要把会议激活
+			ConferenceInfo confInfo = confDao.getConfByBillingCode(targetBillingCode);
+			Timestamp nowTime = new Timestamp(System.currentTimeMillis());
+			if(confInfo.getEndTime().compareTo(nowTime) < 0){
+				Timestamp addNowTime=DateFormatUtil.addMinutesInTimestamp(nowTime,3);
+				int minutes = DateFormatUtil.compareMinute(confInfo.getBeginTime(),addNowTime);
+				confInfo.setConfDuration(minutes);
+			}
+			if(acmService.updateConference(confInfo) == 0){
+				logger.info("更新ACM会议信息成功,会议ID:" + confInfo.getConfId());
+				if(confHandler.updateConfInfo(confInfo)){
+					transferPartyToAnotherConf(targetBillingCode, billingCode,party);
+				}else{
+				 logger.info("更新会议状态出错，会议ID:"+ confInfo.getConfId());	
+				}
+			}else{
+				logger.error("更新ACM会议信息失败，会议ID:" + confInfo.getConfId());
+				throw new RuntimeException("更新ACM会议信息失败，会议名称:" + confInfo.getConfName());
+			}
+		}
+		if(!isSubscribeAndActiveConf(billingCode)){
+			logger.error("拉入走廊时，现在的会议激活失败，会议BC" + billingCode);
+			return false;
+		}
+		Conference targetConf = (Conference) confMgm.getConference(targetBillingCode);
+		Conference nowConf = (Conference) confMgm.getConference(billingCode);
+
+		/**
+		 * 根据电话号码 获取
+		 */
+		String customerTel = StringUtils.convertAcmPhone(party.getCustContryCode(), party.getCustAreacode(), party.getCustTel());
+		IParty partyAcm = nowConf.findLastPartyByPhone(customerTel);
+
+		if(partyAcm == null){
+			for(int i = 0; i < 3; i++){
+				try{
+					TimeUnit.SECONDS.sleep(1);
+					nowConf = (Conference) confMgm.getConference(billingCode);
+					partyAcm = nowConf.findLastPartyByPhone(customerTel);
+					if(partyAcm != null){						
+						break;
+					}
+				}catch (InterruptedException e){
+					e.printStackTrace();
+				}
+			}
+			if(partyAcm == null){
+				logger.error("本场会议不存在这个参与人，phoneNumber " + customerTel);
+				return false;
+			}
+		}
+		String partyID = partyAcm.getPartyID();
+		int result = nowConf.transferPartyToAnotherConference(partyID, targetBillingCode);
+		logger.info("转移参会人 end time" + new Timestamp(System.currentTimeMillis())+",目标会议BC" + targetBillingCode+",会议BC" + billingCode);
+		if(result != 0){
+			logger.error("转移参会人失败，目标会议bc " + targetBillingCode + " 异常码 " + result);
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * 判断客服是否在线 false 不在线 true 在线
+	 */
+	public boolean isOnlineOp(String billingCode, String phone){
+
+		if(!isSubscribeAndActiveConf(billingCode)){
+			return false;
+		}
+		Conference opConf = (Conference) confMgm.getConference(billingCode);
+		
+		/**
+		 * 由于此方法的phone有格式要求（(86)1059933631） 需要在phone前添加（86）
+		 */
+		// 如果电话号码是内线号码，需要去掉2#
+		if(phone.startsWith("2#")){
+			// 如果电话号码是固话，去掉区号的首位0
+			phone = phone.substring(2, phone.length());
+		}
+		if(phone.startsWith("0")){
+			// 如果电话号码是固话，去掉区号的首位0
+			phone = phone.substring(1, phone.length());
+		}
+		String acmPhone = "(86)" + phone;
+		//IParty partyOp = opConf.findPartyByPhone(acmPhone);
+		IParty partyOp = opConf.findLastPartyByPhone(acmPhone);
+		if(partyOp == null){
+			//logger.info("判断客服在线，不存在，partyOp is null,phone="+acmPhone);
+			return false;
+		}
+		int status = partyOp.getConnectState();
+		if(status != 0 && status != 1 && status != 2){
+			return true;
+		}
+		//logger.info("判断客服在线，不在线，status="+status+",phone="+acmPhone);
+		return false;
+	}
+
+	/**
+	 * 判断通讯录的人 是否在会议中 2 会议不存在 0 参会人在线 1不在线2连接中3拒接
+	 */
+	public Integer isOnline(String billingCode, String phone){
+		// 改为在缓存中获取
+		CahcheConference conf = CacheConferenceManage.getLocalCacheConference(billingCode);
+		if(conf != null){
+			for(CacheParty party : conf.getPartyList()){
+				if(phone.equalsIgnoreCase(party.getPhoneNumber())){
+					if(party.getConnectState() == 2){
+						return 2;
+					}else if(party.getConnectState() > 2){
+						return 0;
+					}
+				}
+			}
+		}
+		/**
+		 * 由于此方法的phone有格式要求（(86)1059933631） 需要在phone前添加（86）
+		 */
+		return 1;
+	}
+
+	/**
+	 * 到达预约时间，自动外呼专家
+	 */
+	public boolean callOutGuestAuto(String billingCode){
+		if(!isSubscribeAndActiveConf(billingCode)){
+			return false;
+		}
+		try{
+			logger.info("会议时间达到预约开始时间，系统外呼专家，billingCode is " + billingCode);
+			// 根据billingcode查询会议实体
+			ConferenceInfo resultconf = confDao.getConfByBillingCode(billingCode);
+			if(null == resultconf){
+				logger.error("本场会议bc不存在会议Id billingCode " + billingCode);
+				return false;
+			}
+			Long confId = resultconf.getConfId();
+			// 根据会议id 读取此会议的专家信息(专家type为0)
+			List<CustomerInfo> listParty = Lists.newArrayList();
+			listParty = custDao.getCustInfoForMonit(confId, Consts.IS_GUEST);
+			if(listParty.size() == 0){
+				logger.error("本场会议不存在专家，billingCode " + billingCode);
+				return false;
+			}
+			// 专家信息存在，添加到acm的DialoutParty中
+			List<DialoutParty> listDp = callExpertByACM(confId);
+			// 取得acm会议实体
+			Conference conference = (Conference) confMgm.getConference(billingCode);
+			// 群呼专家
+			int result = callOutGroup(listDp, conference);
+			if(result != 0){
+				logger.error("系统外呼专家失败，异常码 " + result);
+				return false;
+			}
+			return true;
+		}catch (Exception e){
+			logger.error("会议时间达到预约开始时间，系统外呼专家失败 " + e.toString());
+			e.printStackTrace();
+			return false;
+		}
+	}
+
+	/**
+	 * 传递billingcode，订阅及激活账号
+	 */
+
+	public boolean isSubscribeAndActiveConf(String billingCode){
+		if(StringUtils.isEmptyString(billingCode)){
+			logger.error("外呼判断会议是否订阅和激活时传入的BC为空：");
+			return false;
+		}
+		if(!confMgm.isConfSubscribed(billingCode)){
+			int subscribeResult = confMgm.subscribeConf(billingCode);
+			if(subscribeResult != 0){
+				logger.error("会议订阅失败，会议BC:" + billingCode + "异常码:" + subscribeResult);
+				return false;
+			}
+		}
+		IConference conference = (Conference) confMgm.getConference(billingCode);
+		if(conference != null){
+			if(!conference.isActive()){
+				logger.info("会议激活开始"+conference.getBillingCode());
+				int actResult = conference.activate();
+				if(actResult != 0){
+					logger.error("会议激活发送summit平台失败，会议BC：" + billingCode + " 异常码 " + actResult);
+					return false;
+				}
+				String bc = "";
+				for(int i = 0; i < 9; i++){
+					try{
+						TimeUnit.SECONDS.sleep(1);
+						if(RedisService.isExist(billingCode + "激活会议")){
+							bc = (String) RedisService.getCache(billingCode + "激活会议");
+							break;
+						}
+					}catch (InterruptedException e){
+						e.printStackTrace();
+					}
+				}
+				if(StringUtils.isEmptyString(bc)){
+					logger.error("会议summit平台激活失败，会议BC：" + billingCode);
+					return false;
+				}
+			}
+		}else{
+			logger.error("该会议不存在：" + billingCode);
+			return false;
+		}
+		return true;
+	}
+	
+	/**
+	 * 判断咨询客户是否入会，如果入会，则根据会议设置判断是否自动外呼专家
+	 */
+	public void callPersenal(String billingCode){
+		
+		if(!isSubscribeAndActiveConf(billingCode)){
+			return ;
+		}
+		try{
+			// 根据billingcode查询会议Id和会议类型
+			ConferenceInfo resultConf = confDao.getConfByBillingCode(billingCode);
+			if(null != resultConf){
+				Integer confType = resultConf.getConfConfig();
+				Long confId = resultConf.getConfId();
+				logger.info("外呼的会议，confId is " + confId + " and confType is " + confType);
+				// 取得会议实体
+				Conference conference = (Conference) confMgm.getConference(billingCode);
+				List<IParty> partyList = Lists.newArrayList();
+				// 获取会议的参会人信息
+				partyList = conference.getPartyList();
+				if(partyList.size() == 0){
+					logger.error("本场会议客户数量 0, bc:" + conference.getBillingCode());
+					return;
+				}
+				logger.info("本场会议客户数量:" + partyList.size() + "会议bc:" + conference.getBillingCode());
+				int totalCustomer = 0; // 记录咨询客户通讯录中的数量
+				int customerIndex = 0; // 对比咨询客户和缓存中的数量
+				for(IParty party : partyList){
+					if(party.getRole() == Consts.IS_HOST){
+						String phone = party.getPhoneNumber().getPhoneNationalNumber();
+						String country = party.getPhoneNumber().getPhoneCountryCode();
+						String areaCode = party.getPhoneNumber().getPhoneAreaCode();
+						String queryPhone ="";
+						if(country.equals("86")){
+							queryPhone = StringUtils.isMobileNO(phone) ? phone : phone.substring(party.getPhoneNumber().getPhoneAreaCode().length() + 1, phone.length());
+							areaCode = "0" + party.getPhoneNumber().getPhoneAreaCode();
+						}else{
+							queryPhone = phone;
+						}
+						CustomerInfo host = custDao.getHostInfo(queryPhone, Consts.IS_HOST, confId);
+						if(ObjectUtils.isEmpty(host)){
+							CustomerInfo customer = new CustomerInfo();
+							ConferenceInfo confInfo = new ConferenceInfo();
+							confInfo.setConfId(Long.valueOf(confId));
+							customer.setCustAreacode(areaCode);
+							customer.setCustContryCode(country);
+							customer.setCustName(queryPhone);
+							customer.setCustTel(queryPhone);
+							customer.setCustType(party.getRole());
+							// 由于主动接入没有邮箱
+							customer.setCustEmail("");
+							customer.setConfInfo(confInfo);
+							custDao.saveForMonit(customer);
+						}
+						customerIndex++;
+					}
+				}
+				List<CustomerInfo> hostParty = Lists.newArrayList();
+				hostParty = custDao.getCustInfoForMonit(confId, Consts.IS_HOST);
+				totalCustomer = hostParty.size();
+				logger.info("会议BC:" + billingCode + "中有" + customerIndex + "个咨询客户！");
+				// 将会议中的专家 组装进acm的party信息中
+				List<DialoutParty> listDp = callExpertByACM(confId);
+				List<ConferenceSupportTaskInfo> taskList = Lists.newArrayList();
+				taskList = supportDao.getSupportOut(confId, Consts.CONF_TYPE_BUSINESS);
+				if(taskList.size() == 0){
+					if(confType == Consts.MEETING_CONFIG_SINGLE_HOST && partyList.size() == 1){
+						callOutGroup(listDp, conference); // 创建会议时，选择只要有客户入会，立即外呼
+					}
+					if(confType == Consts.MEETING_CONFIG_ALL_HOST && customerIndex == totalCustomer){
+						callOutGroup(listDp, conference); // 创建会议时，所有客户入会，外呼专家
+					}
+				}
+			}
+			logger.info("confMonitorHandle billingCode " + billingCode + " end");
+		}catch (Exception e){
+			logger.error("处理会议开始逻辑有误，会议billingCode " + billingCode + e.toString());
+			e.printStackTrace();
+		}
+	}
+
+}

@@ -1,0 +1,30 @@
+#--------------conference billing interface-----------------------
+confCDR.request.url=http\://10.155.75.109\:8080/billingquery
+confCDR_confEndTime_delayTime=10
+#-----------------------------------------------------------------
+
+report.template.zh=D\:\\template\\report-template.xlsx
+report.reportPath=D\:\\template\\report\\billing\\
+record.recordPath=D\:\\template\\record\\
+max_time_return=5
+
+#--------------session.timeout:second-----------------------------
+deal.refresh.timeout=3600
+#--------------------------------------------------
+
+#--------------resetPwdFromEmail.link.timeout:min------------------
+resetPwdFromEmail.link.timeOut=5
+#--------------------------------------------------
+
+#--------------Op loging need siteid 0:no 1:yes--------------------
+deal.op.isNeedSiteid=0
+deal.op.siteid=0
+#------------------------------------------------------------------
+
+app.mobile.path=/app
+app.tablet.path=/app
+app.root.path=/deal
+app.view.enableFallback=true
+app.view.normalPrefix=pages/
+app.view.mobilePrefix=app/
+app.view.tabletPrefix=app/

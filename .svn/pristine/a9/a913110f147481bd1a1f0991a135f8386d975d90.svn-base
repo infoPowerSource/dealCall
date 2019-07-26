@@ -1,0 +1,745 @@
+package com.deal.service.create.impl;
+
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+import com.deal.dao.create.ConferenceBillingcodeDao;
+import com.deal.dao.create.ConferenceCountryCodeDao;
+import com.deal.dao.create.ConferenceDao;
+import com.deal.dao.create.ConferencePasswordDao;
+import com.deal.dao.create.CustomerDao;
+import com.deal.dao.login.UserInfoDao;
+import com.deal.entity.conference.ConferenceCountryCode;
+import com.deal.entity.create.ConferenceBillingcodeInfo;
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.entity.create.ConferenceInfoForm;
+import com.deal.entity.create.ConferencePasswordInfo;
+import com.deal.entity.create.CustomerInfo;
+import com.deal.entity.login.UserAllInfo;
+import com.deal.entity.login.UserInfo;
+import com.deal.entity.syncboss.SyncBossConfInfoResult;
+import com.deal.service.acm.IACMService;
+import com.deal.service.create.IConferenceService;
+import com.deal.service.mss.IMSSService;
+import com.deal.service.sms.ISMSService;
+import com.deal.service.syncboss.IBossInformService;
+import com.deal.util.ColonyConfUtil;
+import com.deal.util.Consts;
+import com.deal.util.DateFormatUtil;
+import com.deal.util.Page;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+
+import net.fortuna.ical4j.model.ValidationException;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.util.ObjectUtils;
+import org.springframework.util.StringUtils;
+
+import java.sql.Timestamp;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Pattern;
+
+@Service
+public class ConferenceServiceImpl implements IConferenceService{
+	private static Logger logger = LoggerFactory.getLogger(ConferenceServiceImpl.class);
+	@Autowired
+	private ColonyConfUtil colonyConf;
+	@Autowired
+	private ConferenceDao confDao;
+	@Autowired
+	private CustomerDao custDao;
+	@Autowired
+	private ConferenceBillingcodeDao billingcodeDao;
+	@Autowired
+	private ConferencePasswordDao passwordDao;
+	@Autowired
+	private ISMSService smsService;
+	@Autowired
+	private IMSSService mssService;
+	@Autowired
+	private IACMService acmService;
+	@Autowired
+	private IBossInformService bossService;
+	@Autowired
+	private UserInfoDao userInfoDao;
+	private String regEx = "^1[34578]\\d{9}$";
+	@Autowired
+	private ConferenceCountryCodeDao countryDao;
+
+	@Override
+	public ConferenceInfo getConfInfoById(String confId){
+		return confDao.getConfInfoById(confId);
+	}
+
+	@Override
+	public void addConferenceInfo(ConferenceInfoForm confForm, UserAllInfo userInfo) throws ValidationException{
+		ConferenceInfo confInfo = new ConferenceInfo();
+		inputUserInfoToConfInfo(userInfo, confInfo);
+		checkUserStatus(userInfo);
+		ConferenceBillingcodeInfo billingcodeInfo = new ConferenceBillingcodeInfo();
+		billingcodeInfo = getBillingcode();
+		List<ConferencePasswordInfo> passwordList = Lists.newArrayList();
+		passwordList = getPassword();
+		putDataToConferenceInfo(confForm, confInfo, billingcodeInfo.getBillingcode(), passwordList);
+		saveDataToDB(confForm, confInfo);
+		sendConfInfoToACMAndSMS(confForm, confInfo, billingcodeInfo, passwordList);
+	}
+
+	private List<ConferencePasswordInfo> getPassword(){
+		List<ConferencePasswordInfo> passwordList;
+		passwordList = passwordDao.getPasswordList();
+		if(passwordList.size() != 2){
+			logger.error("可用的会议密码不足");
+			throw new RuntimeException("可用的会议密码不足");
+		}
+		return passwordList;
+	}
+
+	private ConferenceBillingcodeInfo getBillingcode(){
+		ConferenceBillingcodeInfo billingcodeInfo;
+		billingcodeInfo = billingcodeDao.getBillingCode();
+		if(ObjectUtils.isEmpty(billingcodeInfo)){
+			logger.error("可用的会议billingcode为空");
+			throw new RuntimeException("可用的会议billingcode为空");
+		}
+		// colonyConf.check(billingcodeInfo.getBillingcode());
+		return billingcodeInfo;
+	}
+
+	private void saveDataToDB(ConferenceInfoForm confForm, ConferenceInfo confInfo){
+		try{
+			confDao.save(confInfo);
+			List<CustomerInfo> custList = confForm.getCustInfo();
+			deleteCustomerInfoFormList(custList);
+			for(CustomerInfo info : custList){
+				CustomerInfo custInfo = new CustomerInfo();
+				putDataToCustomerInfo(confInfo, info, custInfo);
+				try{
+					logger.info("存入用户信息:ConfId=" + confInfo.getConfId() + "客户名称=" + info.getCustName() + "国家码=" + info.getCustContryCode() + "邮编=" + info.getCustAreacode()
+							+ "电话号码=" + info.getCustTel() + "邮箱地址=" + info.getCustEmail());
+					custDao.save(custInfo);
+				}catch (Exception e){
+					logger.error("存入客户信息出错，客户名称:" + custInfo.getCustName() + "错误信息:" + e);
+					throw new RuntimeException("存入客户信息出错，错误信息:" + e);
+				}
+			}
+		}catch (Exception e){
+			logger.error("存入会议信息出错，错误信息:" + e);
+			throw new RuntimeException("存入会议信息出错，错误信息:" + e);
+		}
+	}
+
+	private void sendConfInfoToACMAndSMS(ConferenceInfoForm confForm, ConferenceInfo confInfo, ConferenceBillingcodeInfo billingcodeInfo, List<ConferencePasswordInfo> passwordList)
+			throws ValidationException{
+		int resultAcm = acmService.createConference(confInfo);
+		if(resultAcm == 0){
+			successOperation(confForm, confInfo, billingcodeInfo, passwordList);
+		}else if(resultAcm == 1){
+			updatePasscode(passwordList);
+			List<ConferencePasswordInfo> passcodeList = Lists.newArrayList();
+			passcodeList = getPassword();
+			confInfo.setChairmanPassword(passcodeList.get(0).getPassword());
+			confInfo.setPartyPassword(passcodeList.get(1).getPassword());
+			sendConfInfoToACMAndSMS(confForm, confInfo, billingcodeInfo, passcodeList);
+		}else if(resultAcm == 2){
+			updateBillingcode(billingcodeInfo);
+			ConferenceBillingcodeInfo bcInfo = new ConferenceBillingcodeInfo();
+			bcInfo = getBillingcode();
+			confInfo.setConfBillingcode(bcInfo.getBillingcode());
+			sendConfInfoToACMAndSMS(confForm, confInfo, bcInfo, passwordList);
+		}else{
+			logger.error("开通会议失败，会议标题:" + confInfo.getConfName());
+			throw new RuntimeException("开通会议失败，会议标题:" + confInfo.getConfName());
+		}
+	}
+
+	private void updateBillingcode(ConferenceBillingcodeInfo billingcodeInfo){
+		billingcodeInfo.setIsUsed(Consts.IS_USED);
+		billingcodeInfo.setUseTime(new Timestamp(System.currentTimeMillis()));
+		billingcodeDao.update(billingcodeInfo);
+	}
+
+	private void updatePasscode(List<ConferencePasswordInfo> passwordList){
+		for(ConferencePasswordInfo passwordInfo : passwordList){
+			passwordInfo.setIsUsed(Consts.IS_USED);
+			passwordInfo.setUseTime(new Timestamp(System.currentTimeMillis()));
+			passwordDao.update(passwordInfo);
+		}
+	}
+
+	private void successOperation(ConferenceInfoForm confForm, ConferenceInfo confInfo, ConferenceBillingcodeInfo billingcodeInfo, List<ConferencePasswordInfo> passwordList)
+			throws ValidationException{
+		updateBillingAndPwdStatus(billingcodeInfo, passwordList);
+		List<CustomerInfo> custList = confForm.getCustInfo();
+		for(CustomerInfo info : custList){
+			sendMailForConference(confInfo, info, custList);
+		}
+		SyncBossConfInfoResult result = bossService.syncResvConfInBoss(confInfo);
+		if(result.getStatus() != null && result.getStatus() == (short) 0){
+			logger.info("同步Boss会议信息成功,会议ID:" + confInfo.getConfId());
+		}else{
+			logger.error("创建预约会议同步boss失败,会议ID==" + confInfo.getConfId() + ",错误信息=" + result.getDescription());
+		}
+	}
+
+	private void inputUserInfoToConfInfo(UserAllInfo userInfo, ConferenceInfo confInfo){
+		confInfo.setAccountBillingcode(userInfo.getUserBillingcode());
+		confInfo.setConfCreater(userInfo.getUserDisplayName());
+		confInfo.setAccountCode(userInfo.getUserCustomerCode());
+		confInfo.setCreaterTel(userInfo.getUserMobileNumber());
+		confInfo.setBridgeName(userInfo.getBridgeName());
+	}
+
+	private void checkUserStatus(UserAllInfo userInfo){
+		UserInfo user = userInfoDao.getUserInfoByBillcode(userInfo.getUserBillingcode());
+		if(ObjectUtils.isEmpty(user)){
+			logger.error("用户状态为disable,不能创建会议，账号billinCode=" + userInfo.getUserBillingcode());
+			throw new RuntimeException("用户状态为disable,不能创建会议，账号billinCode=" + userInfo.getUserBillingcode());
+		}
+	}
+
+	private void updateBillingAndPwdStatus(ConferenceBillingcodeInfo billingcodeInfo, List<ConferencePasswordInfo> passwordList){
+		billingcodeInfo.setIsUsed(Consts.IS_USED);
+		billingcodeInfo.setUseTime(new Timestamp(System.currentTimeMillis()));
+		billingcodeDao.update(billingcodeInfo);
+		for(ConferencePasswordInfo passwordInfo : passwordList){
+			passwordInfo.setIsUsed(Consts.IS_USED);
+			passwordInfo.setUseTime(new Timestamp(System.currentTimeMillis()));
+			passwordDao.update(passwordInfo);
+		}
+	}
+
+	private void sendMailForConference(ConferenceInfo confInfo, CustomerInfo info, List<CustomerInfo> custList) throws ValidationException{
+		Map<String, Object> paramsMap = Maps.newHashMap();
+		int mailType = (info.getCustType() == Consts.CONFERENCE_PARTY_TYPE_FOR_CUSTOMER) ? Consts.EMAIL_TYPE_FOR_INFORM_CUSTOMER : Consts.EMAIL_TYPE_FOR_INFORM_EXPERT;
+		paramsMap.put("mailType", mailType);
+		paramsMap.put("confInfo", confInfo);
+		paramsMap.put("custInfo", info);
+		paramsMap.put("custList", custList);
+		if(!StringUtils.isEmpty(info.getCustEmail())){
+			mssService.sendMailByTask(paramsMap);
+		}
+		
+		if(!StringUtils.isEmpty(info.getCustTel())){
+			if(info.getCustContryCode().contains("86")){
+				if(Pattern.matches(regEx, info.getCustTel())){
+					smsService.sendSMSByTask(paramsMap);
+				}
+			}else{
+				smsService.sendSMSByTask(paramsMap);
+			}
+		}
+	}
+
+	private void putDataToCustomerInfo(ConferenceInfo confInfo, CustomerInfo info, CustomerInfo custInfo){
+		if(!StringUtils.isEmpty(info.getCustName())){
+			custInfo.setConfInfo(confInfo);
+			custInfo.setCustAreacode(info.getCustAreacode().equalsIgnoreCase("区号") ? "" : info.getCustAreacode());
+			custInfo.setCustEmail(info.getCustEmail());
+			custInfo.setCustName(info.getCustName());
+			custInfo.setCustTel(info.getCustTel());
+			custInfo.setCustType(info.getCustType());
+			custInfo.setCustContryCode(info.getCustContryCode());
+		}
+	}
+
+	private void putDataToConferenceInfo(ConferenceInfoForm confForm, ConferenceInfo confInfo, String billingCode, List<ConferencePasswordInfo> passwordList){
+		confInfo.setConfName(confForm.getConfName());
+		confInfo.setConfConfig(Integer.valueOf(confForm.getConfig()));
+		int duration = DateFormatUtil.strHours2Minutes(confForm.getDuration());
+		confInfo.setConfDuration(duration);
+		confInfo.setTapedMark(StringUtils.isEmpty(confForm.getTapedMark()) ? Consts.CONFERENCE_NOT_RECORDING : Consts.CONFERENCE_RECORDING);
+		Timestamp beginTime = DateFormatUtil.strData2Timestamp(confForm.getBeginTime());
+		confInfo.setBeginTime(beginTime);
+		confInfo.setEndTime(DateFormatUtil.addMinutesInTimestamp(beginTime, duration));
+		confInfo.setCreateTime(new Timestamp(System.currentTimeMillis()));
+		confInfo.setConfBillingcode(billingCode);
+		confInfo.setChairmanPassword(passwordList.size() > 0 ? passwordList.get(0).getPassword() : "");
+		confInfo.setPartyPassword(passwordList.size() > 0 ? passwordList.get(1).getPassword() : "");
+		confInfo.setConfStatus(Consts.CONFERENCE_STATUS_NOTBEGIN);
+		confInfo.setConfHandleStatus(Consts.NOT_HANDLED);
+	}
+
+	@Override
+	public void updateConference(ConferenceInfoForm confForm, UserAllInfo userInfo) throws ValidationException{
+		String confId = confForm.getConfId();
+		ConferenceInfo confInfo = confDao.getConfInfoById(confId);
+		Timestamp beforeTime = confInfo.getBeginTime();
+		Timestamp updateTime = DateFormatUtil.strData2Timestamp(confForm.getBeginTime());
+		String confOldName = confInfo.getConfName();
+		List<CustomerInfo> addCustList = Lists.newArrayList();
+		List<CustomerInfo> delCustList = Lists.newArrayList();
+		List<CustomerInfo> beforeCustList = custDao.getCustList(confId);
+		List<CustomerInfo> updateCustList = confForm.getCustInfo();
+		deleteCustomerInfoFormList(updateCustList);
+		List<CustomerInfo> updateTelList = Lists.newArrayList();
+		List<CustomerInfo> updateEmailList = Lists.newArrayList();
+		List<CustomerInfo> sameEmailAndTelList = Lists.newArrayList();
+		getAddCustomer(updateCustList, beforeCustList, addCustList);
+		getAddCustomer(beforeCustList, updateCustList, delCustList);
+		getUpdateTelOrEmailList(beforeCustList, updateCustList, updateTelList, updateEmailList, sameEmailAndTelList);
+		updateConfInfo(confForm, confInfo, updateTime, beforeCustList, addCustList, delCustList);
+		if(acmService.updateConference(confInfo) == 0){
+			logger.info("更新ACM会议信息成功,会议ID:" + confInfo.getConfId());
+		}else{
+			logger.error("更新ACM会议信息失败，会议ID:" + confInfo.getConfId());
+			throw new RuntimeException("更新ACM会议信息失败，会议名称:" + confInfo.getConfName());
+		}
+		addNewCustList(beforeCustList, addCustList);
+		delCustFromBeforeCustList(beforeCustList, delCustList);
+		sendMailForConfInfoUpdate(confInfo, beforeTime, updateTime, addCustList, delCustList, beforeCustList, updateCustList, confOldName);
+		sendMailOrSmsforUpdateItem(confInfo, updateTelList, updateEmailList, beforeCustList);
+	}
+
+	private void delCustFromBeforeCustList(List<CustomerInfo> beforeCustList, List<CustomerInfo> delCustList){
+		for(CustomerInfo delCust : delCustList){
+			for(CustomerInfo cust : beforeCustList){
+				if(delCust.getCustEmail().equalsIgnoreCase(cust.getCustEmail()) && delCust.getCustTel().equalsIgnoreCase(cust.getCustTel())){
+					beforeCustList.remove(cust);
+					break;
+				}
+			}
+		}
+	}
+
+	private void sendMailOrSmsforUpdateItem(ConferenceInfo confInfo, List<CustomerInfo> updateTelList, List<CustomerInfo> updateEmailList, List<CustomerInfo> beforeCustList)
+			throws ValidationException{
+		for(CustomerInfo emailCust : updateEmailList){
+			if(!StringUtils.isEmpty(emailCust.getCustEmail())){
+				sendConfInfoWithEmail(confInfo, emailCust, beforeCustList);
+			}
+		}
+		for(CustomerInfo telCust : updateTelList){
+			if(!StringUtils.isEmpty(telCust.getCustTel())){
+				sendConfInfoWithTel(confInfo, telCust, beforeCustList);
+			}
+		}
+	}
+
+	private void sendConfInfoWithTel(ConferenceInfo confInfo, CustomerInfo telCust, List<CustomerInfo> updateTelList){
+		Map<String, Object> paramsMap = Maps.newHashMap();
+		int mailType = (telCust.getCustType() == Consts.CONFERENCE_PARTY_TYPE_FOR_CUSTOMER) ? Consts.EMAIL_TYPE_FOR_INFORM_CUSTOMER : Consts.EMAIL_TYPE_FOR_INFORM_EXPERT;
+		paramsMap.put("mailType", mailType);
+		paramsMap.put("confInfo", confInfo);
+		paramsMap.put("custInfo", telCust);
+		paramsMap.put("custList", updateTelList);
+		if(Pattern.matches(regEx, telCust.getCustTel())){
+			smsService.sendSMSByTask(paramsMap);
+		}
+	}
+
+	private void sendConfInfoWithEmail(ConferenceInfo confInfo, CustomerInfo emailCust, List<CustomerInfo> updateEmailList) throws ValidationException{
+		Map<String, Object> paramsMap = Maps.newHashMap();
+		int mailType = (emailCust.getCustType() == Consts.CONFERENCE_PARTY_TYPE_FOR_CUSTOMER) ? Consts.EMAIL_TYPE_FOR_INFORM_CUSTOMER : Consts.EMAIL_TYPE_FOR_INFORM_EXPERT;
+		paramsMap.put("mailType", mailType);
+		paramsMap.put("confInfo", confInfo);
+		paramsMap.put("custInfo", emailCust);
+		paramsMap.put("custList", updateEmailList);
+		mssService.sendMailByTask(paramsMap);
+	}
+
+	private void getUpdateTelOrEmailList(List<CustomerInfo> beforeCustList, List<CustomerInfo> updateCustList, List<CustomerInfo> updateTelList, List<CustomerInfo> updateEmailList,
+			List<CustomerInfo> sameEmailAndTelList){
+		for(CustomerInfo updateCust : updateCustList){
+			for(CustomerInfo beforeCust : beforeCustList){
+				if(updateCust.getCustId() == beforeCust.getCustId()){
+					if(!StringUtils.isEmpty(updateCust.getCustEmail())){
+						if(!updateCust.getCustEmail().equalsIgnoreCase(beforeCust.getCustEmail())){
+							updateEmailList.add(updateCust);
+						}
+					}
+					if(!StringUtils.isEmpty(updateCust.getCustTel())){
+						if(!updateCust.getCustTel().equalsIgnoreCase(beforeCust.getCustTel())){
+							updateTelList.add(updateCust);
+						}
+					}
+				}
+			}
+		}
+
+	}
+
+	private void sendMailForConfInfoUpdate(ConferenceInfo confInfo, Timestamp beforeTime, Timestamp updateTime, List<CustomerInfo> addCustList, List<CustomerInfo> delCustList,
+			List<CustomerInfo> beforeCustList, List<CustomerInfo> updateCustList, String confOldName) throws ValidationException{
+		if(beforeTime.getTime() != updateTime.getTime() || !confInfo.getConfName().equalsIgnoreCase(confOldName)){
+			for(CustomerInfo info : beforeCustList){
+				sendChangemailForCust(confInfo, info, beforeCustList);
+			}
+			SyncBossConfInfoResult result = bossService.syncResvConfInBoss(confInfo);
+			if(result.getStatus() != null && result.getStatus() == (short) 0){
+				logger.info("同步Boss修改会议信息成功,会议ID:" + confInfo.getConfId());
+			}else{
+				logger.error("修改会议信息同步boss失败,会议ID==" + confInfo.getConfId() + ",错误信息=" + result.getDescription());
+			}
+		}else{
+			for(CustomerInfo info : addCustList){
+				sendMailForConference(confInfo, info, beforeCustList);
+			}
+			for(CustomerInfo info : delCustList){
+				sendMailForCancelConference(confInfo, info, delCustList);
+			}
+		}
+	}
+
+	private void sendChangemailForCust(ConferenceInfo confInfo, CustomerInfo info, List<CustomerInfo> custList) throws ValidationException{
+		Map<String, Object> paramsMap = Maps.newHashMap();
+		int mailType = (info.getCustType() == Consts.CONFERENCE_PARTY_TYPE_FOR_CUSTOMER) ? Consts.EMAIL_TYPE_FOR_INFORM_CHANGE_CUSTOMER
+				: Consts.EMAIL_TYPE_FOR_INFORM_CHANGE_EXPERT;
+		paramsMap.put("mailType", mailType);
+		paramsMap.put("confInfo", confInfo);
+		paramsMap.put("custInfo", info);
+		paramsMap.put("custList", custList);
+		if(!StringUtils.isEmpty(info.getCustEmail())){
+			mssService.sendMailByTask(paramsMap);
+		}
+		if(!StringUtils.isEmpty(info.getCustTel()) && Pattern.matches(regEx, info.getCustTel())){
+			smsService.sendSMSByTask(paramsMap);
+		}
+	}
+
+	private void addNewCustList(List<CustomerInfo> beforeCustList, List<CustomerInfo> addCustList){
+		for(CustomerInfo info : addCustList){
+			beforeCustList.add(info);
+		}
+	}
+
+	private void sendMailForCancelConference(ConferenceInfo confInfo, CustomerInfo info, List<CustomerInfo> custList) throws ValidationException{
+		Map<String, Object> paramsMap = Maps.newHashMap();
+		int mailType = (info.getCustType() == Consts.CONFERENCE_PARTY_TYPE_FOR_CUSTOMER) ? Consts.EMAIL_TYPE_FOR_INFORM_CANCEL_CUSTOMER
+				: Consts.EMAIL_TYPE_FOR_INFORM_CANCEL_EXPERT;
+		paramsMap.put("mailType", mailType);
+		paramsMap.put("confInfo", confInfo);
+		paramsMap.put("custInfo", info);
+		paramsMap.put("custList", custList);
+		if(!StringUtils.isEmpty(info.getCustEmail())){
+			mssService.sendMailByTask(paramsMap);
+		}
+		if(!StringUtils.isEmpty(info.getCustTel()) || Pattern.matches(regEx, info.getCustTel())){
+			smsService.sendSMSByTask(paramsMap);
+		}
+	}
+
+	private void updateConfInfo(ConferenceInfoForm confForm, ConferenceInfo confInfo, Timestamp updateTime, List<CustomerInfo> beforeCustList, List<CustomerInfo> addCustList,
+			List<CustomerInfo> delCustList){
+		confInfo.setConfName(confForm.getConfName());
+		confInfo.setBeginTime(updateTime);
+		confInfo.setConfConfig(Integer.valueOf(confForm.getConfig()));
+		confInfo.setTapedMark(StringUtils.isEmpty(confForm.getTapedMark()) ? Consts.CONFERENCE_NOT_RECORDING : Consts.CONFERENCE_RECORDING);
+		int duration = DateFormatUtil.strHours2Minutes(confForm.getDuration());
+		confInfo.setEndTime(DateFormatUtil.addMinutesInTimestamp(updateTime, duration));
+		confInfo.setConfDuration(duration);
+		try{
+			confDao.update(confInfo);
+			updateCustInfo(confForm, beforeCustList);
+			delCustInfo(delCustList);
+			addCustInfo(confInfo, addCustList);
+		}catch (Exception e){
+			logger.error("更新会议信息出错。会议名称=" + confInfo.getConfName() + "错诶信息:" + e.getMessage());
+			throw new RuntimeException("更新会议信息出错。会议名称=" + confInfo.getConfName() + "错诶信息:" + e.getMessage());
+		}
+	}
+
+	private void addCustInfo(ConferenceInfo confInfo, List<CustomerInfo> addCustList){
+		for(CustomerInfo addCust : addCustList){
+			addCust.setConfInfo(confInfo);
+			custDao.save(addCust);
+		}
+	}
+
+	private void delCustInfo(List<CustomerInfo> delCustList){
+		for(CustomerInfo delCust : delCustList){
+			custDao.deleteById(delCust.getCustId());
+		}
+	}
+
+	private void updateCustInfo(ConferenceInfoForm confForm, List<CustomerInfo> beforeCustList){
+		List<CustomerInfo> updateCustList = confForm.getCustInfo();
+		for(CustomerInfo updateCust : updateCustList){
+			for(CustomerInfo beforeCust : beforeCustList){
+				if(updateCust.getCustId() == beforeCust.getCustId()){
+					updateCustInfo(updateCust, beforeCust);
+				}
+			}
+		}
+	}
+
+	private void updateCustInfo(CustomerInfo updateCust, CustomerInfo beforeCust){
+		beforeCust.setCustType(updateCust.getCustType());
+		beforeCust.setCustEmail(updateCust.getCustEmail());
+		beforeCust.setCustTel(updateCust.getCustTel());
+		beforeCust.setCustName(updateCust.getCustName());
+		beforeCust.setCustContryCode(updateCust.getCustContryCode());
+		beforeCust.setCustAreacode(updateCust.getCustAreacode().equalsIgnoreCase("区号") ? "" : updateCust.getCustAreacode());
+		custDao.updateEntity(beforeCust);
+	}
+
+	private void getAddCustomer(List<CustomerInfo> updateCustList, List<CustomerInfo> beforeCustList, List<CustomerInfo> diffCustList){
+
+		for(CustomerInfo updateCust : updateCustList){
+			boolean isDiff = true;
+			for(CustomerInfo beforeCust : beforeCustList){
+				if(updateCust.getCustId() == beforeCust.getCustId()){
+					isDiff = false;
+				}
+			}
+			if(isDiff){
+				diffCustList.add(updateCust);
+			}
+		}
+	}
+
+	/**
+	 * 根据billingCode获取conferenceId和会议类型
+	 *
+	 * @author zhipeng.xu
+	 */
+	public ConferenceInfo getConfByBillingCode(String billingCode){
+		return confDao.getConfByBillingCode(billingCode);
+	}
+
+	/**
+	 * 根据客户billingcode和日期查询会议信息
+	 *
+	 * @author zhipeng.xu
+	 */
+	public List<ConferenceInfo> getConfByCreateAndTime(String billingCode, Timestamp beginTime, Timestamp endTime){
+		return confDao.getConfByCreateAndTime(billingCode, beginTime, endTime);
+	}
+
+	/**
+	 * 根据会议bc 更新会议状态
+	 *
+	 * @param billingCode
+	 * @param status
+	 */
+	public void updateConfStatus(ConferenceInfo conf){
+		confDao.update(conf);
+	}
+
+	@Override
+	public Map<Integer, List<CustomerInfo>> getAllCustTypeList(String confId){
+		List<CustomerInfo> custList = custDao.getCustList(confId);
+		List<CustomerInfo> expertList = Lists.newArrayList();
+		List<CustomerInfo> partyList = Lists.newArrayList();
+		Map<Integer, List<CustomerInfo>> custMap = Maps.newHashMap();
+		for(CustomerInfo cust : custList){
+			if(cust.getCustType() == Consts.IS_HOST){
+				partyList.add(cust);
+			}else{
+				expertList.add(cust);
+			}
+		}
+		custMap.put(Consts.IS_HOST, partyList);
+		custMap.put(Consts.IS_GUEST, expertList);
+		return custMap;
+	}
+
+	@Override
+	public void delConferenceInfo(String confId){
+		ConferenceInfo confInfo = confDao.getConfInfoById(confId);
+		if(!ObjectUtils.isEmpty(confInfo)){
+			if(acmService.deleteConferenceById(confInfo) == 0){
+				logger.info("删除ACM会议信息成功,会议ID:" + confInfo.getConfId());
+			}else{
+				logger.error("删除ACM会议信息失败,会议ID:" + confInfo.getConfId());
+				throw new RuntimeException("删除ACM会议信息失败，会议名称:" + confInfo.getConfName());
+			}
+			confInfo.setConfStatus(Consts.CONFERENCE_STATUS_CANCEL);
+			try{
+				confDao.update(confInfo);
+				List<CustomerInfo> custList = custDao.getCustList(confId);
+				for(CustomerInfo custInfo : custList){
+					sendMailForCancelConference(confInfo, custInfo, custList);
+				}
+			}catch (Exception e){
+				logger.error("更新会议信息出错，会议ID" + confInfo.getConfId());
+			}
+			SyncBossConfInfoResult result = bossService.syncResvConfInBoss(confInfo);
+			if(result.getStatus() != null && result.getStatus() == (short) 0){
+				logger.info("同步Boss取消会议信息成功,会议ID:" + confInfo.getConfId());
+			}else{
+				logger.error("取消会议同步boss失败,会议ID==" + confInfo.getConfId() + ",错误信息=" + result.getDescription());
+			}
+		}else{
+			logger.error("查询不到改会议信息,会议ID:" + confInfo.getConfId());
+			throw new RuntimeException("查询不到改会议信息,会议ID:" + confInfo.getConfId());
+		}
+	}
+
+	/**
+	 * 根据日期查询开始的会议信息
+	 */
+	public List<ConferenceInfo> getConfByDate(String time){
+		return confDao.getConfByDate(time);
+
+	}
+
+	/**
+	 * 根据acmbillingCode 判断是否主动服务会议
+	 */
+	public ConferenceInfo getMeeting(String billingCode){
+		return confDao.getMeeting(billingCode);
+	}
+
+	@Override
+	public List<ConferenceInfo> getEndConf(String timeEnd, int type){
+		return confDao.getEndConf(timeEnd, type);
+	}
+
+	@Override
+	public void deleteBillingCode(){
+		ConferenceBillingcodeInfo billingcodeInfo = billingcodeDao.getBillingCode();
+		List<ConferencePasswordInfo> passwordList = passwordDao.getPasswordList();
+		updateBillingAndPwdStatus(billingcodeInfo, passwordList);
+	}
+
+	@Override
+	public List<Timestamp> getAllConfTodo(String billingCode, Timestamp beginTime){
+		return confDao.geAllConfTodoWithOutTime(billingCode, beginTime);
+	}
+
+	public void deleteCustomerInfoFormList(List<CustomerInfo> customerList){
+		for(int i = 0; i < customerList.size(); i++){
+			if(StringUtils.isEmpty(customerList.get(i).getCustTel()) && StringUtils.isEmpty(customerList.get(i).getCustEmail())){
+				customerList.remove(i);
+				i--;
+			}
+		}
+	}
+
+	@Override
+	public List<ConferenceInfo> getUnendConfListAfterTime4Page(String billingCode, Timestamp beginTime, int pageNum, int pageSize){
+		return confDao.getUnendConfListAfterTime4Page(billingCode, beginTime, pageNum, pageSize);
+	}
+
+	/**
+	 * 分页查询会议
+	 *
+	 * @param keyword
+	 *            关键字
+	 * @param date
+	 *            日期
+	 * @param billingCode
+	 *            计费码
+	 * @param pageNum
+	 *            当前页码
+	 * @param pageSize
+	 * @return
+	 */
+	@Override
+	public Page searchConf4Page(String keyword, String date, String billingCode, int pageNum, int pageSize){
+		List recordList = null;
+		int total = 0;
+		try{
+			if(StringUtils.isEmpty(date)){
+				total = confDao.getSearchConfListNum(keyword, billingCode);
+				recordList = confDao.getSearchConfList(keyword, billingCode, pageNum, pageSize);
+			}else if(StringUtils.isEmpty(keyword)){
+				Timestamp beginTime = DateFormatUtil.str2Timestamp(date);
+				Timestamp endTime = DateFormatUtil.dateReductionDay(beginTime, -1);
+				recordList = confDao.getConfByCreateAndTimeWithPage(billingCode, beginTime, endTime, pageNum, pageSize);
+				total = confDao.getSearchConfListNumForTime(billingCode, beginTime, endTime);
+			}else{
+				Timestamp beginTime = DateFormatUtil.str2Timestamp(date);
+				Timestamp endTime = DateFormatUtil.dateReductionDay(beginTime, -1);
+				recordList = confDao.getSearchConfListWithTime(keyword, billingCode, beginTime, endTime, pageNum, pageSize);
+				total = confDao.getSearchConfListNumWithTime(keyword, billingCode, beginTime, endTime);
+			}
+		}catch (Exception e){
+			e.printStackTrace();
+			logger.error("搜索会议列表信息出错，错误信息", e.getMessage());
+		}
+
+		return new Page(pageNum, pageSize, total, recordList);
+	}
+
+	@Override
+	public List<CustomerInfo> getAllCustList(String confId){
+		return custDao.getCustList(confId);
+	}
+
+	@Override
+	public void addAppConferenceInfo(String data, UserAllInfo userInfo, String confId) throws ValidationException{
+		ConferenceInfoForm confForm = new ConferenceInfoForm();
+		JSONObject jsonObject = JSON.parseObject(data);
+		JSONArray jzArray = jsonObject.getJSONArray("zj");
+		JSONArray khArray = jsonObject.getJSONArray("kh");
+		JSONObject cfgObj = jsonObject.getJSONObject("cfg");
+		confForm.setConfName(cfgObj.getString("zt"));
+		confForm.setBeginTime(cfgObj.getString("sj"));
+		confForm.setConfig(cfgObj.getString("hjKey"));
+		confForm.setDuration(cfgObj.getString("sc"));
+		confForm.setTapedMark(cfgObj.getString("ly").equals("false") ? "" : "2");
+		List<CustomerInfo> custList = Lists.newArrayList();
+		for(int i = 0; i < jzArray.size(); i++){
+			String country = "", area = "";
+			JSONObject tempObj = jzArray.getJSONObject(i);
+			JSONObject custItem = JSON.parseObject(tempObj.getString("dat"));
+			CustomerInfo cust = new CustomerInfo();
+			if(!StringUtils.isEmpty(confId)){
+				cust.setCustId(custItem.getLongValue("custId"));
+			}
+			cust.setCustEmail(custItem.getString("ema"));
+			cust.setCustName(custItem.getString("nam"));
+			cust.setCustTel(custItem.getString("pho"));
+			if(!custItem.getString("guo").startsWith("+")){
+				country = "+" + custItem.getString("guo");
+			}else{
+				country = custItem.getString("guo");
+			}
+			cust.setCustContryCode(country);
+			if(custItem.getString("quh") != null && !"".equals(custItem.getString("quh"))){
+				area = custItem.getString("quh");
+			}
+			cust.setCustAreacode(area);
+			cust.setCustType(Consts.IS_GUEST);
+			custList.add(cust);
+		}
+		for(int i = 0; i < khArray.size(); i++){
+			String country = "", area = "";
+			JSONObject tempObj = khArray.getJSONObject(i);
+			JSONObject custItem = JSON.parseObject(tempObj.getString("dat"));
+			CustomerInfo cust = new CustomerInfo();
+			if(!StringUtils.isEmpty(confId)){
+				cust.setCustId(custItem.getLongValue("custId"));
+			}
+			cust.setCustEmail(custItem.getString("ema"));
+			cust.setCustName(custItem.getString("nam"));
+			cust.setCustTel(custItem.getString("pho"));
+			if(!custItem.getString("guo").startsWith("+")){
+				country = "+" + custItem.getString("guo");
+			}else{
+				country = custItem.getString("guo");
+			}
+			cust.setCustContryCode(country);
+			if(custItem.getString("quh") != null && !"".equals(custItem.getString("quh"))){
+				area = custItem.getString("quh");
+			}
+			cust.setCustAreacode(area);
+			cust.setCustType(Consts.IS_HOST);
+			custList.add(cust);
+		}
+		confForm.setCustInfo(custList);
+		if(StringUtils.isEmpty(confId)){
+			addConferenceInfo(confForm, userInfo);
+		}else{
+			confForm.setConfId(confId);
+			updateConference(confForm, userInfo);
+		}
+	}
+	// 获取国家码列表
+	@Override
+	public List<ConferenceCountryCode> getCountryCode(){
+		List<ConferenceCountryCode> codeList = countryDao.getCountryCode();
+		if(codeList.size() < 1){
+			logger.error("国家码列表为空");
+			throw new RuntimeException("国家码列表为空");
+		}
+		return codeList;
+	}
+}

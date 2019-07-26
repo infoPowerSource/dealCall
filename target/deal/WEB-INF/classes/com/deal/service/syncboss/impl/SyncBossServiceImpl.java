@@ -1,0 +1,389 @@
+package com.deal.service.syncboss.impl;
+
+import java.sql.Timestamp;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.commons.lang.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONObject;
+import com.deal.dao.create.ConferenceDao;
+import com.deal.dao.login.UserInfoDao;
+import com.deal.dao.login.syncboss.UserSiteDao;
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.entity.login.UserInfo;
+import com.deal.entity.login.UserSiteInfo;
+import com.deal.entity.syncboss.ComponentDTO;
+import com.deal.entity.syncboss.ContractDTO;
+import com.deal.entity.syncboss.CustomerDTO;
+import com.deal.entity.syncboss.RequestDTO;
+import com.deal.entity.syncboss.ResourceDTO;
+import com.deal.entity.syncboss.UserDTO;
+import com.deal.entity.syncboss.UserResultDTO;
+import com.deal.entity.syncboss.UserResultListDTO;
+import com.deal.service.syncboss.ISyncBossService;
+import com.deal.util.Consts;
+import com.deal.util.UmsClientUtil;
+
+@Service
+// @Scope("prototype")
+public class SyncBossServiceImpl implements ISyncBossService{
+	private static Logger logger = LoggerFactory.getLogger(SyncBossServiceImpl.class);
+	@Value("${syncBoss.componentName}")
+	private String componentName = "deal";
+	@Value("${url.ums}")
+	private String urlPrefix;
+	@Autowired
+	private UmsClientUtil httpClient;
+	@Autowired
+	private UserInfoDao userInfoDao;
+	@Autowired
+	private UserSiteDao userSiteDao;
+	@Autowired
+	private ConferenceDao confDao;
+
+	@Override
+	public void saveSyncDataResult(RequestDTO input) throws ParseException{
+		String finishedTime = getFinishedTime();
+		String requestId = input.getRequestId();
+		String callback = input.getCallback();
+		String type = input.getType();
+		String customerCode = input.getCustomer().getCustomerCode();
+		String customerName = input.getCustomer().getCustomerName();
+		Integer contractId = input.getCustomer().getContract().getId();
+		UserResultDTO ur = new UserResultDTO();
+		ur.setRequestId(requestId);
+		ur.setFinishedTime(finishedTime);
+		ur.setContractId(contractId);
+		ur.setComponentName(componentName);
+		ContractDTO contractDTO = input.getCustomer().getContract();
+		List<UserDTO> userDTOs = input.getCustomer().getUsers();
+		if(null == userDTOs || userDTOs.isEmpty()){
+			// contract info
+			try{
+//			    ContractDTO contractDTO = input.getCustomer().getContract();
+				logger.info("contractDTO:" + JSON.toJSON(contractDTO));
+				for(ComponentDTO c : contractDTO.getComponents()){
+					if(componentName.equals(c.getName())){
+						UserSiteInfo usi = getUserSiteInfo(c, contractDTO.getResource(), input.getCustomer());
+						if("create".equalsIgnoreCase(type)){
+							userSiteDao.saveSite(usi);
+						}else if("update".equalsIgnoreCase(type)){
+							UserSiteInfo dbusi = userSiteDao.getSiteById(usi.getSiteId());
+							if(null == dbusi){
+								logger.info("DB未匹配出站点数据");
+								ur.setResult(-1);
+							}else{
+								long id = dbusi.getId();
+								logger.info("DB匹配出数据，id:" + id);
+								usi.setId(id);
+							}
+							userSiteDao.updateSite(usi);
+						}
+						break;
+					}
+				}
+			}catch (Exception e){
+				logger.error("BOSS Sync-contract，error:", e);
+				ur.setResult(-1);
+			}
+			// send http 2
+			sendBossCallback(callback, ur);
+		}else{
+			Date createdTime = input.getCreatedTime();
+			// users info
+			List<UserResultListDTO> successedList = new ArrayList<UserResultListDTO>();
+			List<UserResultListDTO> failedList = new ArrayList<UserResultListDTO>();
+			ur.setSuccessedList(successedList);
+			ur.setFailedList(failedList);
+			// 定义： 0-停用；1-启用；2-删除；
+			// 操作： type=create/enable/update 是 1（默认）; type=disable是 0;
+			// type=delete是2
+			for(UserDTO u : userDTOs){
+				try{
+					logger.info("UserDTO:" + JSON.toJSON(u));
+					// long umsId = u.getId();
+					// 同步UMS
+					// JSONObject result = syncUms(String.valueOf(umsId));
+					UserInfo userInfo = getUserInfo(customerCode, contractId, u, createdTime);
+					String bridgeName = getUserBridgeName(contractDTO.getComponents(),u.getComponents());
+					userInfo.setBridgeName(bridgeName);
+					getContractInfoForUser(contractDTO.getComponents(), u.getComponents() ,userInfo);
+					if("create".equalsIgnoreCase(type)){
+						getTargetUserInfo(ur, userInfo);
+						if(-1 == ur.getResult()){
+							ur.setResult(1);
+							logger.info("save userInfo,umsid:" + userInfo.getUserId());
+							userInfoDao.save(userInfo);
+						}else{// 存在之前数据，更新
+							logger.info("save userInfo,but exist userInfo,umsid:" + userInfo.getUserId());
+							userInfoDao.updateUser(userInfo);
+						}
+					}else if("update".equalsIgnoreCase(type) || "enable".equalsIgnoreCase(type)){
+						getTargetUserInfo(ur, userInfo);
+						userInfoDao.updateUser(userInfo);
+					}else if("disable".equalsIgnoreCase(type)){
+						getTargetUserInfo(ur, userInfo);
+						userInfo.setUserStatus(Consts.USER_STATUS_FOR_DISABLE);
+						userInfoDao.updateUser(userInfo);
+					}else if("delete".equalsIgnoreCase(type)){
+						getTargetUserInfo(ur, userInfo);
+						userInfo.setUserStatus(Consts.USER_STATUS_FOR_DELETE);
+						userInfoDao.updateUser(userInfo);
+						try{
+							deleteConferenceStatus(userInfo);
+						}catch (Exception e){
+							logger.error("BOSS Sync-user-deleteConferenceStatus，error:", e);
+						}
+					}else{
+						failedList.add(getUserResultListDTO(u, "1", "unknown type"));
+						logger.info("unknown type:" + type);
+						continue;
+					}
+				}catch (Exception e){
+					logger.error("BOSS Sync-user，error:", e);
+					failedList.add(getUserResultListDTO(u, "2", ""));
+					continue;
+				}
+				successedList.add(getUserResultListDTO(u, null, null));
+			}
+			// send http 3
+			sendBossCallback(callback, ur);
+		}
+	}
+
+	private void getTargetUserInfo(UserResultDTO ur, UserInfo userInfo){
+		UserInfo dbui = userInfoDao.getUserByUmsId(String.valueOf(userInfo.getUserId()));
+		if(null == dbui){
+			logger.info("DB未匹配出用户数据");
+			ur.setResult(-1);
+		}else{
+			long id = dbui.getId();
+			logger.info("DB匹配出用户数据，id:" + id);
+			userInfo.setId(id);
+		}
+	}
+
+	private void deleteConferenceStatus(UserInfo UserInfo){
+		ConferenceInfo confInfo = confDao.getConfInfoByBillingCode(UserInfo.getUserBillingCode());
+		if(null != confInfo){
+			confInfo.setConfStatus(Consts.CONFERENCE_STATUS_CANCEL);
+			confDao.update(confInfo);
+		}
+	}
+
+	private String getFinishedTime(){
+		Date now = new Date();
+		String finishedTime = String.valueOf(now.getTime());
+		logger.info("finishedTime:" + finishedTime);
+		return finishedTime;
+	}
+
+	private String getUserBridgeName(List<ComponentDTO> contractComponentDTO, List<ComponentDTO>  userComponentDTO){
+		String userBridgeName ="";
+		String contractBridgeName ="";
+		for(ComponentDTO c : userComponentDTO){
+			if(componentName.equals(c.getName())){
+				Map<String, String> property = c.getProperty();
+				if(null != property){
+					userBridgeName = property.get("BridgeName");
+				}
+			}
+		}
+		for(ComponentDTO c : contractComponentDTO){
+			if(componentName.equals(c.getName())){
+			    contractBridgeName = c.getProperty().get("BridgeName");
+			}
+		}
+		
+		logger.info("解析的userBridgeName:" + userBridgeName +",contractBridgeName:" + contractBridgeName);
+		if(StringUtils.isEmpty(userBridgeName)){
+			userBridgeName = contractBridgeName;
+		}
+		logger.info("最终userBridgeName:" + userBridgeName);
+		return userBridgeName;
+	}
+	
+	private UserSiteInfo getUserSiteInfo(ComponentDTO c, ResourceDTO resourceDTO, CustomerDTO customerDTO){
+		String customerCode = customerDTO.getCustomerCode();
+		String customerName = customerDTO.getCustomerName();
+		Integer contractId = customerDTO.getContract().getId();
+
+		UserSiteInfo usi = new UserSiteInfo();
+		usi.setSiteId(resourceDTO.getSiteId());// DB:1
+		usi.setSiteUrl(resourceDTO.getSiteURL());// DB:11
+		Map<String, String> property = c.getProperty();
+
+		usi.setCompanyName(customerName);// company_nameDB:3
+		usi.setContractId(contractId);// DB:4
+
+		usi.setLanguage(Integer.parseInt(isnullForInt(property.get("language"))));// languageDB:7
+		usi.setLogoSavePath(property.get("logoSavePath"));// 站点logo存放路径DB:8
+		usi.setPasswordLength(Integer.parseInt(isnullForInt(property.get("passcodeLength"))));// 会议密码首选位数DB:9
+//		usi.setPlateformId(2);// 平台ID-plateform_id,DB:10 :summit2
+		return usi;
+	}
+	
+	//@propType = 2
+	private void getContractInfoForUser(List<ComponentDTO> contractComponentDTO,List<ComponentDTO> userComponentDTO, UserInfo userInfo){
+		int Pcode1InTone=-1;
+		int Pcode1OutTone=-1;
+		String Pcode2Mode="T";
+		int Pcode2InTone=-1;
+		int Pcode2OutTone=-1;
+		
+		for(ComponentDTO c : userComponentDTO){
+			if(componentName.equals(c.getName())){
+				Map<String, String> property = c.getProperty();
+				if(null != property){
+					Pcode1InTone = Integer.parseInt(isnullForInt(property.get("Pcode1InTone")));
+					Pcode1OutTone = Integer.parseInt(isnullForInt(property.get("Pcode1OutTone")));
+					//Pcode2Mode = property.get("Pcode2Mode");
+					Pcode2InTone = Integer.parseInt(isnullForInt(property.get("Pcode2InTone")));
+					Pcode2OutTone = Integer.parseInt(isnullForInt(property.get("Pcode2OutTone")));
+				}
+			}
+		}
+		for(ComponentDTO c : contractComponentDTO){
+			if(componentName.equals(c.getName())){
+				Map<String, String> property = c.getProperty();
+				if(null != property){
+					if(Pcode1InTone == -1){
+						Pcode1InTone = Integer.parseInt(isnullForInt(property.get("Pcode1InTone")));
+					}
+					if(Pcode1OutTone == -1){
+						Pcode1OutTone = Integer.parseInt(isnullForInt(property.get("Pcode1OutTone")));
+					}
+					//Pcode2Mode = property.get("Pcode2Mode");
+					if(Pcode2InTone == -1){
+						Pcode2InTone = Integer.parseInt(isnullForInt(property.get("Pcode2InTone")));
+					}
+					if(Pcode2OutTone == -1){
+						Pcode2OutTone = Integer.parseInt(isnullForInt(property.get("Pcode2OutTone")));
+					}
+				}
+			}
+		}
+
+		userInfo.setPcode1InTone(Pcode1InTone);
+		userInfo.setPcode1OutTone(Pcode1OutTone);
+		userInfo.setPcode2Mode(Pcode2Mode);
+		userInfo.setPcode2InTone(Pcode2InTone);
+		userInfo.setPcode2OutTone(Pcode2OutTone);
+	}
+
+	private String isnullForInt(String string){
+		if(null == string){
+			return "-1";
+		}else{
+			return string;
+		}
+	}
+
+	/**
+	 * ����DB��ӦEntry
+	 * 
+	 * @param createdTime
+	 */
+	private UserInfo getUserInfo(String customerCode, Integer contractId, UserDTO u, Date createdTime){
+		Long umsid = u.getId();
+		String billingCode = u.getBillingCode();
+		UserInfo ui = new UserInfo();
+		ui.setUserId(umsid);
+		ui.setUserCustomerCode(customerCode);
+		ui.setUserBillingCode(billingCode);
+		// ui.setAccountId(u.getAccountId());
+		SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+		String createdTimeStr = sdf.format(createdTime);
+		ui.setCreateTime(Timestamp.valueOf(createdTimeStr));
+		// ui.setSiteId(String.valueOf(u.getSiteId()));
+		ui.setUserStatus(Consts.USER_STATUS_FOR_ENABLE);
+
+		UserSiteInfo usi = userSiteDao.getSiteById(u.getSiteId());
+		ui.setSiteInfo(usi);
+		return ui;
+	}
+
+	/** ����BOSS�ӿ�3��ӦEntry */
+	private UserResultListDTO getUserResultListDTO(UserDTO u, String errorCode, String errorinfo){
+		UserResultListDTO urlDTO = new UserResultListDTO();
+		urlDTO.setId(u.getId());
+		urlDTO.setBillingCode(u.getBillingCode());
+		urlDTO.setAccountId(u.getAccountId());
+		urlDTO.setErrorCode(errorCode);
+		urlDTO.setError(errorinfo);
+		return urlDTO;
+	}
+
+	/** BOSS账号同步接口2or3 */
+	public Object sendBossCallback(String umsUrl, UserResultDTO dto){
+		String jsonStr = getJson(dto);
+		return httpClient.sendBossCallback(umsUrl, jsonStr);
+		// return httpClient.sendHttp(umsUrl,
+		// httpClient.defaultJsonSyncUms(jsonStr));
+	}
+
+	private String getJson(UserResultDTO dto){
+		JSONObject obj = new JSONObject();
+		{
+			obj.put("requestId", dto.getRequestId());
+			obj.put("finishedTime", dto.getFinishedTime());
+			obj.put("result", dto.getResult());
+			obj.put("contractId", dto.getContractId());
+			obj.put("componentName", dto.getComponentName());
+			obj.put("successed", dto.getSuccessedList());
+			obj.put("failed", dto.getFailedList());
+		}
+		String jsonStr = obj.toJSONString();
+		logger.info("jsonStr content :" + jsonStr);
+		return jsonStr;
+	}
+
+	/** 同步UMS */
+	public JSONObject syncUms(String id){
+		logger.info("url:" + urlPrefix + id);
+		return httpClient.sendHttpNoEntity(urlPrefix + id);
+	}
+
+	public static void main(String[] args) throws ParseException{
+		Date now = new Date();
+		String finishedTime = String.valueOf(now.getTime());
+		logger.info("finishedTime:" + finishedTime);
+
+		// Date date1 = new Date();// 获取当前时间
+		// SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+		// String str = sdf.format(date1);// 时间存储为字符串
+		// System.out.println(str);
+		// System.out.println(Timestamp.valueOf(str));// 输出结果
+		// // 备注：上面的几步是为了确保字符串是时间类型，自己定义相应的字符串类型即可
+		// SyncBossServiceImpl a = new SyncBossServiceImpl();
+		// UserResultDTO u = new UserResultDTO();
+		// System.out.println(a.getJson(u));
+		// ;
+		// RestTemplate restTemplate = new RestTemplate();
+		// String k =
+		// "{\"input\":{\"billingcode\":\"5575651\",\"yearmonth\":\"201509\",\"confid\":\"5575651-201509-0001\"},\"filter\":[]}";
+		//
+		// HttpHeaders requestHeaders = new HttpHeaders();
+		// requestHeaders.setContentType(MediaType.APPLICATION_JSON);
+		// HttpEntity<String> requestEntity = new HttpEntity<String>(k,
+		// requestHeaders);
+		// JSONObject result = restTemplate.postForObject(
+		// "http://192.168.11.196:8090/billingquery/uniinterface/billing/getfeeconfdetail",
+		// requestEntity,
+		// JSONObject.class);
+		// System.out.println("userId: " + result + "," +
+		// result.getString("result"));
+	}
+}

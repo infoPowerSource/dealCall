@@ -1,0 +1,64 @@
+package com.deal.service.task;
+
+import java.util.List;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+import org.springframework.util.ObjectUtils;
+
+import com.deal.dao.create.ConferenceBillingcodeDao;
+import com.deal.dao.create.ConferenceDao;
+import com.deal.dao.create.ConferencePasswordDao;
+import com.deal.entity.create.ConferenceBillingcodeInfo;
+import com.deal.entity.create.ConferenceInfo;
+import com.deal.entity.create.ConferencePasswordInfo;
+import com.deal.monitor.cache.RedisService;
+import com.deal.service.acm.IACMService;
+import com.deal.util.Consts;
+import com.deal.util.DateFormatUtil;
+
+@Component("recyclePassCodeJob")
+public class recycleConferencePassCodeJob{
+	private static Logger logger = LoggerFactory.getLogger(recycleConferencePassCodeJob.class);
+
+	@Autowired
+	private ConferenceDao confDao;
+	@Autowired
+	private IACMService acmService;
+	@Autowired
+	private ConferencePasswordDao passwordDao;
+	
+	public synchronized void execute(){
+		String key = DateFormatUtil.getTimeASKey()+"recycPassCode";
+		if(!RedisService.IsExistOper(key, "recyclePassCodeJob")){
+			RedisService.putOperToCache(key, "recyclePassCodeJob");
+			List<ConferenceInfo> confList = confDao.getEndConfList();
+			for(ConferenceInfo confInfo : confList){
+				String confBillingcode = confInfo.getConfBillingcode();
+				if(acmService.deleteConfByBillingcode(confBillingcode) == 0){
+					String chairmanPasscode = confInfo.getChairmanPassword();
+					String partypasscode = confInfo.getPartyPassword();
+					recyclePasscode(chairmanPasscode);
+					recyclePasscode(partypasscode);
+					confInfo.setConfHandleStatus(Consts.IS_HANDLED);
+					confDao.update(confInfo);
+					logger.info("密码回收回收会议信息,confInfo:"+confInfo.getConfId());
+				}
+			}
+		}
+	}
+
+	private void recyclePasscode(String chairmanPasscode){
+		ConferencePasswordInfo chairmanPassword = new ConferencePasswordInfo();
+		chairmanPassword = passwordDao.getPwdByPasswordName(chairmanPasscode);
+		if(ObjectUtils.isEmpty(chairmanPassword)){
+			logger.error("回收会议密码时，查询该会议密码记录为空，会议密码:" + chairmanPasscode);
+		}else{
+			chairmanPassword.setIsUsed(Consts.USABLE);
+			chairmanPassword.setUseTime(null);
+			logger.info("回收会议密码成功，会议密码:" + chairmanPasscode);
+		}
+	}
+}

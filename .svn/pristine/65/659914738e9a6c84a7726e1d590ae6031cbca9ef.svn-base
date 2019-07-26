@@ -1,0 +1,40 @@
+@CHARSET "UTF-8";
+
+.laydate_body .laydate_box {
+	margin-left: -15px !important;
+}
+
+.form-fgpw .input-bt-line .input-block.task {
+	height: auto;
+}
+.input-warnning{
+	border-color:red!important;
+}
+
+
+.drop-list-box.countrycode {
+	width: 62px;
+}
+.drop-list-box.countrycode .select-menu:focus {
+	background-position: 85px;
+}
+.drop-list-box .code_list {
+    width: 100%;
+    font-size: inherit;
+}
+.drop-list-box.countrycode .code_list {
+    display: none;
+    border: 1px solid #caced3;
+    z-index: 5;
+    padding: 5px 5px 5px 10px;
+    font-size: inherit;
+    border-radius: 2px;
+    background-color: #fff;
+    width: 250% !important;
+    left: 0 !important;
+    position: absolute;
+    top: 37px;
+    height: 220px !important;
+    overflow-y: auto !important;
+	cursor: pointer;
+}

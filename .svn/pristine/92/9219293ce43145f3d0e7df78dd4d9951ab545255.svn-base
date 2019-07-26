@@ -1,0 +1,248 @@
+.input-block .control-btn {
+	margin: 5px 8px;
+}
+.input-block .control-btn.reduce-btn {
+	
+}
+.input-block .control-btn.add-more {
+	
+}
+.text-center {
+	text-align: center;
+}
+
+.form-fgpw .add-task .input-group-lg {
+	width: 730px;
+}
+.input-block.task .message {
+	posotion: relative;
+	width: auto;
+	margin-top: 7px;
+}
+
+.form-fgpw .input-bt-line .input-block.task {
+	height: auto;
+}
+
+.input-warnning{
+	border-color:red!important;
+}
+.conf-begin-time-wrap {
+	position: relative;
+	float: left;
+	margin-right: 10px;
+	height: 36px;
+	width: 270px;
+	padding: 7px;
+	border-radius: 2px;
+  	background-color: #ffffff;
+  	border: solid 1px #c5c9cd;
+  	color: #4a4a4a;
+  	font-size: 14px;
+  	z-index: 100;
+}
+.conf-begin-time-wrap * {
+	vertical-align: middle;
+}
+.conf-begin-time-wrap .placeholder {
+	font-size: 14px;
+}
+.input-block.task .conf-begin-time-wrap .input-pub {
+	width: 82px;
+	margin-right: 8px;
+	height: 22px;
+	line-height: 22px;
+	padding: 0;
+	color: #4a4a4a !important;
+}
+.input-block.task .conf-begin-time-wrap .weekday {
+	float: left;
+	margin-right: 50px;
+	height: 22px;
+	line-height: 22px;
+}
+.input-block.task .conf-begin-time-wrap input {
+	border: none;
+}
+.input-block.task .conf-begin-time-wrap input:hover,
+.input-block.task .conf-begin-time-wrap input:focus {
+	border: none !important;
+	box-shadow: none !important;
+}
+.input-block.task .conf-begin-time-wrap .time-s {
+	float: left;
+	width: 25px;
+	height: 22px;
+	line-height: 22px;
+	cursor: pointer;
+}
+.input-block.task .conf-begin-time-wrap .hms {
+	float: left;
+	margin-right: 12px;
+	height: 22px;
+	line-height: 22px;
+}
+
+.input-block.task .conf-begin-time-wrap .time-list {
+	position: absolute;
+	top: 36px;
+	height: 200px;
+	overflow-y: auto;
+	border: 1px solid #c5c9cd;
+	background-color: #fff;
+	text-align: center;
+	border-radius: 2px;
+	cursor: pointer;
+	display: none;
+}
+.input-block.task .conf-begin-time-wrap .time-list li {
+	padding: 2px 12px;
+}
+.input-block.task .conf-begin-time-wrap .time-list li:hover {
+	background: #f5f5f5;
+}
+.input-block.task .conf-begin-time-wrap .time-list li.active {
+	background: #f5f5f5;
+}
+.input-block.task .conf-begin-time-wrap .hour-list {
+	left: 173px;
+}
+.input-block.task .conf-begin-time-wrap .minute-list {
+	left: 214px;
+}
+.conf-user-list {
+	position: absolute;
+	width: 540px;
+	display: none;
+	border-radius: 2px;
+  	background-color: #ffffff;
+  	box-shadow: 0 2px 6px 0 rgba(0, 0, 0, 0.2);
+  	border: solid 1px #c5c9cd;
+  	overflow: hidden;
+}
+.conf-user-list .user-item {
+	overflow: hidden;
+	height: 36px;
+	line-height: 36px;
+	font-size: 16px;
+  	color: #4a4a4a;
+  	cursor: pointer;
+}
+.conf-user-list .user-item:hover {
+	background-color: #f2f3f5;
+}
+.conf-user-list .user-item-info {
+	float: left;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.conf-user-list .user-name {
+	margin-right: 10px;
+	padding: 0 5px;
+	width: 100px;
+	height: 36px;
+}
+.conf-user-list .user-contry {
+	padding-left: 11px;
+	width: 50px;
+	height: 36px;
+}
+.conf-user-list .user-area {
+	padding-left: 9px;
+	width: 60px;
+	height: 36px;
+}
+.conf-user-list .user-phone {
+	padding-left: 9px;
+	width: 110px;
+	height: 36px;
+}
+.conf-user-list .user-email {
+	padding-left: 36px;
+	width: 145px;
+	height: 36px;
+}
+.form-fgpw .form-box .input-bt-line {
+	width: 540px;
+}
+.input-block.task .input-pub.theme {
+	width: 460px;
+}
+.input-block.task .input-pub.time {
+	width: 180px;
+}
+.tel-group {
+	width: 240px;
+}
+.input-block.task .input-pub.conf-user-item-email {
+	width: 180px;
+}
+.drop-list-box.theme {
+	width: 460px;
+}
+.drop-list-box.theme .select-menu,
+.drop-list-box.theme .select-menu:focus {
+	background-position: 425px;
+}
+.czmm_button {
+	margin-left: 5px;
+}
+.drop-list-box.l-size .select-menu,
+.drop-list-box.l-size .select-menu:focus {
+	background-position: 155px;
+}
+.drop-list-box.l-size {
+	width: 180px;
+}
+
+@-moz-document url-prefix() {
+    .input-block.task .conf-begin-time-wrap .time-list li {
+        width: 56px;
+        text-align: left;
+    }
+}
+
+.drop-list-box.countrycode {
+	width: 62px;
+}
+.drop-list-box.countrycode .select-menu:focus {
+	background-position: 85px;
+}
+.drop-list-box .code_list {
+    width: 100%;
+    font-size: inherit;
+}
+.drop-list-box.countrycode .code_list {
+    display: none;
+    border: 1px solid #caced3;
+    z-index: 5;
+    padding: 5px 5px 5px 10px;
+    font-size: inherit;
+    border-radius: 2px;
+    background-color: #fff;
+    width: 250% !important;
+    left: 0 !important;
+    position: absolute;
+    top: 37px;    
+    height: 220px !important;
+    overflow-y: auto !important;
+	cursor: pointer;
+}
+
+.advanced-set{
+	cursor: pointer;
+	background:#fff url(../images/triangle.png) no-repeat 100%;
+}
+.advanced-set:hover{
+	background:#fff url(../images/triangle-hover.png) no-repeat 100%;
+}
+.advanced{
+	line-height:36px;font-size:16px;color:#4a4a4a;display: none;
+}
+.advanced .advanced-item{
+	width: 80px;float: left;
+}
+.advanced label{
+	cursor: pointer;
+}

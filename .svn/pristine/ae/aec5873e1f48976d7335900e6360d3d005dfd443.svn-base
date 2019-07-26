@@ -1,0 +1,9 @@
+package com.deal.service.create.impl;
+
+import com.deal.entity.create.ConferenceInfo;
+
+public interface IConferenceHandleService{
+
+	boolean updateConfInfo(ConferenceInfo confInfo);
+
+}
